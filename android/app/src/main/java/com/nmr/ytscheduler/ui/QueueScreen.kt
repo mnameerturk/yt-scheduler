@@ -97,7 +97,7 @@ fun QueueScreen(refreshKey: Int, onOpen: (Int) -> Unit, onSettings: () -> Unit) 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("YT Scheduler") },
+                title = { Text("NMR Scheduler") },
                 actions = {
                     IconButton(onClick = { scope.launch { load() } }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh")

@@ -9,7 +9,7 @@
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
-        android:label="YT Scheduler"
+        android:label="NMR Scheduler"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
 

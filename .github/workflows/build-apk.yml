@@ -33,14 +33,14 @@ jobs:
       - name: Rename APK
         run: |
           mkdir -p out
-          cp app/build/outputs/apk/debug/app-debug.apk "out/YTScheduler-v1.0.${{ github.run_number }}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "out/NMRScheduler-v1.0.${{ github.run_number }}.apk"
 
       # Each build becomes a GitHub Release, so the APK can be downloaded on the phone from
       # github.com/mnameerturk/yt-scheduler/releases/latest
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: app-v1.0.${{ github.run_number }}
-          name: YT Scheduler v1.0.${{ github.run_number }}
+          name: NMR Scheduler v1.0.${{ github.run_number }}
           body: Download the .apk below and open it on your Android phone to install or update.
           files: android/out/*.apk
           make_latest: true
