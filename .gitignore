@@ -1,0 +1,7 @@
+.env
+.venv/
+data/
+client_secret*.json
+__pycache__/
+*.pyc
+yt_scheduler_pc.json
