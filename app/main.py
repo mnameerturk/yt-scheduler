@@ -1,4 +1,6 @@
 import hashlib
+import html
+import time
 import hmac
 import io
 import json
@@ -78,6 +80,34 @@ def connect_drive():
     return _start_login("drive")
 
 
+@app.post("/api/connect-link", dependencies=[Depends(need_auth)])
+def connect_link(data: dict = Body(default={})):
+    """One-time link (10 min) so the phone app can open Google sign-in in a browser without logging in there."""
+    kind = "drive" if data.get("kind") == "drive" else "youtube"
+    now = time.time()
+    links = {c: v for c, v in (db.kv_get("connect_links") or {}).items() if v["exp"] > now}
+    code = secrets.token_urlsafe(18)
+    links[code] = {"kind": kind, "exp": now + 600}
+    db.kv_set("connect_links", links)
+    return {"url": f"{BASE_URL}/connect-start?code={code}"}
+
+
+@app.get("/connect-start")
+def connect_start(code: str = ""):
+    links = db.kv_get("connect_links") or {}
+    link = links.pop(code, None)
+    db.kv_set("connect_links", links)
+    if not link or link["exp"] < time.time():
+        return HTMLResponse("<p>This link has expired. Tap the button in the app again.</p>", status_code=400)
+    return _start_login(link["kind"])
+
+
+DONE_PAGE = """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{font-family:system-ui,sans-serif;background:#0f1115;color:#e8e8e8;text-align:center;padding:60px 20px}
+a{color:#90caf9}</style></head><body><h2>&#10003; {what} connected</h2>
+<p>You can close this tab and go back to the app.</p><p><a href="/">Open the web dashboard</a></p></body></html>"""
+
+
 def _start_login(kind):
     state = secrets.token_urlsafe(24)
     db.kv_set("oauth_state", {"state": state, "kind": kind})
@@ -116,7 +146,7 @@ def oauth_callback(code: str = "", state: str = "", error: str = ""):
             db.x("UPDATE accounts SET is_storage=0")
             db.update("accounts", acc_id, is_storage=1)
         google.access_token(acc_id, force=True, kind="drive")
-        return RedirectResponse("/?connected=drive", status_code=303)
+        return HTMLResponse(DONE_PAGE.replace("{what}", "Google Drive"))
 
     ch = google.my_channel(tok["access_token"])
     if not ch:
@@ -133,7 +163,7 @@ def oauth_callback(code: str = "", state: str = "", error: str = ""):
         acc_id = db.x("INSERT INTO accounts(email, created_at) VALUES(?, ?)", (email, db.now_iso()))
     db.update("accounts", acc_id, **fields)
     google.access_token(acc_id, force=True)
-    return RedirectResponse("/?connected=youtube", status_code=303)
+    return HTMLResponse(DONE_PAGE.replace("{what}", "YouTube channel " + html.escape(ch["title"])))
 
 
 # ---------- helpers ----------

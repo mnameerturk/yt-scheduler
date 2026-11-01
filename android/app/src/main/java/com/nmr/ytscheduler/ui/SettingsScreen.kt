@@ -1,0 +1,170 @@
+package com.nmr.ytscheduler.ui
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.dp
+import com.nmr.ytscheduler.data.Api
+import com.nmr.ytscheduler.data.Channel
+import com.nmr.ytscheduler.data.Prefs
+import kotlinx.coroutines.launch
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsScreen(firstRun: Boolean, onDone: () -> Unit) {
+    val ctx = LocalContext.current
+    val prefs = remember { Prefs(ctx) }
+    val api = remember { Api(ctx) }
+    val scope = rememberCoroutineScope()
+
+    var server by remember { mutableStateOf(prefs.server.ifBlank { "https://dayroom-cinch-scorer.ngrok-free.dev" }) }
+    var password by remember { mutableStateOf(prefs.password) }
+    var status by remember { mutableStateOf<String?>(null) }
+    var channels by remember { mutableStateOf<List<Channel>>(emptyList()) }
+    var reload by remember { mutableIntStateOf(0) }
+    var busy by remember { mutableStateOf(false) }
+
+    LaunchedEffect(reload) {
+        if (!prefs.configured) return@LaunchedEffect
+        try {
+            channels = api.channels()
+            status = null
+        } catch (e: Exception) {
+            status = e.message
+        }
+    }
+
+    fun act(block: suspend () -> Unit) {
+        busy = true
+        scope.launch {
+            try { block() } catch (e: Exception) { toast(ctx, e.message ?: "Something went wrong") } finally { busy = false }
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(if (firstRun) "Connect to your server" else "Channels & settings") },
+                navigationIcon = {
+                    if (!firstRun) IconButton(onClick = onDone) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
+        }
+    ) { pad ->
+        Column(
+            Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text("Server", style = MaterialTheme.typography.titleMedium)
+            OutlinedTextField(
+                value = server, onValueChange = { server = it }, singleLine = true,
+                label = { Text("Server address") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = password, onValueChange = { password = it }, singleLine = true,
+                label = { Text("App password") }, visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Button(enabled = !busy, onClick = {
+                prefs.server = server
+                prefs.password = password
+                act {
+                    api.channels()
+                    toast(ctx, "Connected")
+                    reload++
+                    if (firstRun) onDone()
+                }
+            }) { Text("Save and test") }
+            status?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+
+            if (prefs.configured) {
+                HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                Text("YouTube channels and Drive", style = MaterialTheme.typography.titleMedium)
+                if (channels.none { it.isStorage && it.hasDrive }) {
+                    Text(
+                        "Connect Google Drive so the PC has somewhere to put videos.",
+                        color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                channels.forEach { c -> AccountCard(c, busy, onStorage = {
+                    act { api.setStorage(c.id); reload++ }
+                }, onRemove = {
+                    act { api.removeAccount(c.id); reload++ }
+                }) }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(enabled = !busy, onClick = { act { openUrl(ctx, api.connectLink("youtube")) } }) {
+                        Text("+ YouTube channel")
+                    }
+                    OutlinedButton(enabled = !busy, onClick = { act { openUrl(ctx, api.connectLink("drive")) } }) {
+                        Text("+ Google Drive")
+                    }
+                }
+                Text(
+                    "Sign-in opens in your browser. When it says connected, come back and tap Refresh.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                TextButton(onClick = { reload++ }) { Text("Refresh list") }
+                TextButton(onClick = { openUrl(ctx, prefs.server) }) { Text("Open web dashboard") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AccountCard(c: Channel, busy: Boolean, onStorage: () -> Unit, onRemove: () -> Unit) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp)) {
+            Text(c.title ?: "Drive only", fontWeight = FontWeight.SemiBold)
+            Text(c.email ?: "", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val badges = buildList {
+                if (c.channelId != null) add("YouTube")
+                if (c.hasDrive) add(if (c.isStorage) "Drive storage" else "Drive")
+                if (c.needsReconnect) add("Reconnect needed")
+            }
+            Text(badges.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (c.hasDrive && !c.isStorage) TextButton(enabled = !busy, onClick = onStorage) { Text("Use this Drive") }
+                TextButton(enabled = !busy, onClick = onRemove) { Text("Remove") }
+            }
+        }
+    }
+}
