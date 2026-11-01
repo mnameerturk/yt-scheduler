@@ -94,9 +94,8 @@ def connect_link(data: dict = Body(default={})):
 
 @app.get("/connect-start")
 def connect_start(code: str = ""):
-    links = db.kv_get("connect_links") or {}
-    link = links.pop(code, None)
-    db.kv_set("connect_links", links)
+    # Reusable until it expires: browsers sometimes open the same link twice.
+    link = (db.kv_get("connect_links") or {}).get(code)
     if not link or link["exp"] < time.time():
         return HTMLResponse("<p>This link has expired. Tap the button in the app again.</p>", status_code=400)
     return _start_login(link["kind"])
