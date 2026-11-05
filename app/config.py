@@ -22,6 +22,8 @@ CLIENT_SECRET_FILE = ROOT / os.getenv("CLIENT_SECRET_FILE", "client_secret.json"
 TIMEZONE = os.getenv("TIMEZONE", "Asia/Kolkata")
 # While the YouTube API audit is pending, uploads are forced private anyway.
 TEST_MODE = os.getenv("TEST_MODE", "1") == "1"
+# Optional override for every upload: public, unlisted or private (handy for testing after the audit)
+UPLOAD_PRIVACY = os.getenv("UPLOAD_PRIVACY", "").strip().lower()
 # "shared": all videos stored in one Google account's Drive; "per_channel": each channel's own Drive
 DRIVE_MODE = os.getenv("DRIVE_MODE", "shared")
 DATA_DIR = ROOT / os.getenv("DATA_DIR", "data")

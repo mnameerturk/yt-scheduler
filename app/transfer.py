@@ -7,7 +7,7 @@ from pathlib import Path
 import requests
 
 from . import db
-from .config import CHUNK, TEST_MODE
+from .config import CHUNK, TEST_MODE, UPLOAD_PRIVACY
 from .google import DRIVE, YT, YT_UPLOAD, GoogleError, access_token, call
 
 log = logging.getLogger("transfer")
@@ -29,7 +29,8 @@ def _create_session(v, total):
             "categoryId": v["category_id"] or "27",
         },
         "status": {
-            "privacyStatus": "private" if TEST_MODE else "public",
+            "privacyStatus": UPLOAD_PRIVACY if UPLOAD_PRIVACY in ("public", "unlisted", "private")
+            else ("private" if TEST_MODE else "public"),
             "selfDeclaredMadeForKids": bool(v["made_for_kids"]),
             "containsSyntheticMedia": bool(v["synthetic_media"]),
         },
