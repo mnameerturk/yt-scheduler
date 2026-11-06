@@ -566,9 +566,13 @@ def next_flow_job():
 
 
 def _save_jpeg(src, dst):
-    img = ImageOps.exif_transpose(Image.open(src)).convert("RGB")
+    im = Image.open(src)
+    if im.format == "JPEG" and im.size == (1280, 720) and Path(src).stat().st_size < 2 * 1024 * 1024:
+        shutil.copyfile(src, dst)   # already YouTube-ready (from the extension): no second compression
+        return
+    img = ImageOps.exif_transpose(im).convert("RGB")
     img = ImageOps.fit(img, (1280, 720), Image.Resampling.LANCZOS)
-    for quality in (92, 85, 75, 65):
+    for quality in (97, 92, 85, 75):
         buf = io.BytesIO()
         img.save(buf, "JPEG", quality=quality, optimize=True)
         if buf.tell() < 2 * 1024 * 1024:
