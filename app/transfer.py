@@ -134,6 +134,27 @@ def set_youtube_thumbnail(v, video_id, path):
         return str(e)[:300]
 
 
+def update_youtube_details(v, title=None, description=None, tags=None):
+    """Change title/description/tags of a video that is already on YouTube. Keeps the rest of its snippet."""
+    r = call(v["channel_account_id"], "GET", YT + "/videos", params={"part": "snippet", "id": v["youtube_id"]})
+    items = r.json().get("items", [])
+    if not items:
+        raise GoogleError(404, "video not found on YouTube (deleted?)")
+    sn = items[0]["snippet"]
+    body = {"title": sn["title"], "description": sn.get("description", ""), "categoryId": sn["categoryId"]}
+    for k in ("tags", "defaultLanguage", "defaultAudioLanguage"):
+        if sn.get(k):
+            body[k] = sn[k]
+    if title is not None:
+        body["title"] = title
+    if description is not None:
+        body["description"] = description
+    if tags is not None:
+        body["tags"] = tags
+    call(v["channel_account_id"], "PUT", YT + "/videos", params={"part": "snippet"},
+         json={"id": v["youtube_id"], "snippet": body})
+
+
 def after_upload(v, video_id):
     notes = []
     # re-read: a thumbnail may have been picked while the video was uploading

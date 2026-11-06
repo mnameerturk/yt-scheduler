@@ -183,6 +183,7 @@ fun EditorScreen(videoId: Int, onBack: () -> Unit) {
             return@Scaffold
         }
         val editable = v.status in listOf("draft", "scheduled", "failed")
+        val wordsEditable = editable || v.status == "posted"   // title/description/tags update on YouTube
         Column(
             Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -227,19 +228,19 @@ fun EditorScreen(videoId: Int, onBack: () -> Unit) {
                 Button(onClick = { openUrl(ctx, url) }) { Text("Open on YouTube") }
             }
 
-            TitleOptions(v, editable && !busy, onMore = { act { fill(api.moreTitles(videoId)); toast(ctx, "Writing 3 more titles…") } }) { t ->
-                act { fill(api.update(videoId, JSONObject().put("title", t))); toast(ctx, "Title set") }
+            TitleOptions(v, wordsEditable && !busy, onMore = { act { fill(api.moreTitles(videoId)); toast(ctx, "Writing 3 more titles…") } }) { t ->
+                act { fill(api.update(videoId, JSONObject().put("title", t))); toast(ctx, if (v.status == "posted") "Title updated on YouTube" else "Title set") }
             }
             OutlinedTextField(
-                value = title, onValueChange = { if (it.length <= 100) title = it }, enabled = editable,
+                value = title, onValueChange = { if (it.length <= 100) title = it }, enabled = wordsEditable,
                 label = { Text("Title (${title.length}/100)") }, modifier = Modifier.fillMaxWidth()
             )
             OutlinedTextField(
-                value = description, onValueChange = { description = it }, enabled = editable,
+                value = description, onValueChange = { description = it }, enabled = wordsEditable,
                 label = { Text("Description") }, minLines = 4, modifier = Modifier.fillMaxWidth()
             )
             OutlinedTextField(
-                value = tags, onValueChange = { tags = it }, enabled = editable,
+                value = tags, onValueChange = { tags = it }, enabled = wordsEditable,
                 label = { Text("Tags (comma separated)") }, modifier = Modifier.fillMaxWidth()
             )
 
@@ -284,6 +285,15 @@ fun EditorScreen(videoId: Int, onBack: () -> Unit) {
                         toast(ctx, "Uploading to YouTube now")
                     }
                 }) { Text("Post now") }
+            }
+            if (v.status == "posted") {
+                Button(enabled = !busy, modifier = Modifier.fillMaxWidth(), onClick = {
+                    act {
+                        fill(api.update(videoId, JSONObject().put("title", title.trim()).put("description", description)
+                            .put("tags", JSONArray(tags.split(",").map { it.trim() }.filter { it.isNotEmpty() }))))
+                        toast(ctx, "Updated on YouTube")
+                    }
+                }) { Text("Update on YouTube") }
             }
             if (v.status == "failed") {
                 OutlinedButton(enabled = !busy, modifier = Modifier.fillMaxWidth(), onClick = {

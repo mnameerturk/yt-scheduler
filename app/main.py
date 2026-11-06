@@ -344,9 +344,22 @@ def get_video(vid: int):
 @app.patch("/api/videos/{vid}", dependencies=[api])
 def edit_video(vid: int, data: dict = Body(...)):
     v = _get_video(vid)
-    if v["status"] in ("posting", "posted"):
-        raise HTTPException(409, "already posting or posted")
+    if v["status"] == "posting":
+        raise HTTPException(409, "uploading right now; edit it when it's posted")
     fields = _clean(data)
+    if v["status"] == "posted":
+        # only the words can change now; they're updated on YouTube first
+        fields = {k: val for k, val in fields.items() if k in ("title", "description", "tags")}
+        changed = {k: val for k, val in fields.items() if val != v[k]}
+        if changed and v["youtube_id"]:
+            from .transfer import update_youtube_details
+            try:
+                update_youtube_details(v, title=changed.get("title"), description=changed.get("description"),
+                                       tags=json.loads(changed["tags"]) if "tags" in changed else None)
+            except google.GoogleError as e:
+                raise HTTPException(502, f"YouTube didn't accept the change: {str(e)[:200]}")
+        db.update("videos", vid, **changed)
+        return _video_out(_get_video(vid))
     if "publish_at" in fields:
         fields["status"] = "scheduled" if fields["publish_at"] else "draft"
         fields.update(attempts=0, next_try_at=None, error=None)
