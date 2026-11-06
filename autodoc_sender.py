@@ -1,0 +1,173 @@
+"""AutoDoc -> NMR Scheduler, automatically.
+
+Watches AutoDoc's projects folder. When a project finishes rendering, it uploads the video to Drive once,
+adds it to the scheduler queue on the right channel (by the project's profile) and sends the script, so
+Claude writes the titles, description and thumbnails on the server.
+
+  pythonw autodoc_sender.py                 watch (install_autostart.bat starts this with Windows)
+  python  autodoc_sender.py --list          finished projects and whether they were sent
+  python  autodoc_sender.py --send NAME...  send specific (older) projects now, e.g. 08_old_ephraim_utah_1923
+
+Which file is sent: final_captioned.mp4 if you made one, otherwise final.mp4. New renders wait
+WAIT_MINUTES after finishing first, so there's time to add captions. Settings: autodoc_sender.json
+"""
+import argparse
+import json
+import socket
+import sys
+import time
+import traceback
+from datetime import datetime
+from pathlib import Path
+
+import send_to_queue as stq
+
+HERE = Path(__file__).resolve().parent
+CONF = HERE / "autodoc_sender.json"
+LOG = HERE / "autodoc_sender.log"
+MARK = ".sent_to_scheduler.json"
+DEFAULTS = {
+    "projects_dir": r"D:\New folder (4)\autodoc_projects",
+    "channels": {"wildlife": "Lost Archive", "ancient_history": "Known"},  # AutoDoc profile -> part of channel name
+    "wait_minutes": 30,
+    "check_every_seconds": 120,
+}
+
+
+def log(msg):
+    line = f"{datetime.now():%Y-%m-%d %H:%M:%S}  {msg}"
+    print(line, flush=True)
+    try:
+        if LOG.exists() and LOG.stat().st_size > 2_000_000:
+            LOG.replace(LOG.with_suffix(".old.log"))
+        with LOG.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+
+
+def conf():
+    c = dict(DEFAULTS)
+    if CONF.exists():
+        c.update(json.loads(CONF.read_text(encoding="utf-8")))
+    if "since" not in c:  # first run: only renders finished from now on are sent automatically
+        c["since"] = time.time()
+        CONF.write_text(json.dumps(c, indent=2), encoding="utf-8")
+    return c
+
+
+def finished(p):
+    """Render finished time (epoch) or None."""
+    try:
+        q = json.loads((p / "queue_progress.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if q.get("phase") != "done" or not (p / "final.mp4").exists():
+        return None
+    return float(q.get("ts") or (p / "final.mp4").stat().st_mtime)
+
+
+def video_file(p):
+    cap = p / "final_captioned.mp4"
+    return cap if cap.exists() else p / "final.mp4"
+
+
+def profile(p):
+    try:
+        return json.loads((p / "project.json").read_text(encoding="utf-8")).get("profile", "")
+    except (OSError, ValueError):
+        return ""
+
+
+def send(srv, p, c):
+    prof = profile(p)
+    want = c["channels"].get(prof)
+    if not want:
+        raise RuntimeError(f"no channel set for AutoDoc profile '{prof}' (add it to autodoc_sender.json)")
+    chans = [ch for ch in srv.req("GET", "/api/channels") if ch["channel_id"]]
+    hits = [ch for ch in chans if want.lower() in (ch["channel_title"] or "").lower()]
+    if len(hits) != 1:
+        raise RuntimeError(f"'{want}' matched {len(hits)} channels")
+    channel = hits[0]
+    vf = video_file(p)
+    log(f"{p.name}: sending {vf.name} ({vf.stat().st_size / 1024 / 1024:.0f} MB) to {channel['channel_title']}")
+    try:
+        file_id, drive_acc = stq.upload_to_drive(srv, channel, vf)
+    except SystemExit as e:  # the uploader exits on hard failures; here we just retry later
+        raise RuntimeError(f"Drive upload stopped: {e}") from None
+    script = stq.find_script(vf)
+    v = srv.req("POST", "/api/videos", json={
+        "channel_account_id": channel["id"], "drive_account_id": drive_acc, "drive_file_id": file_id,
+        "file_name": f"{p.name}.mp4", "file_size": vf.stat().st_size, "title": p.name,
+        "description": "", "tags": "", "auto_thumbnail": True, "script": script})
+    (p / MARK).write_text(json.dumps({"video_id": v["id"], "file": vf.name, "channel": channel["channel_title"],
+                                      "at": datetime.now().isoformat(timespec="seconds")}), encoding="utf-8")
+    log(f"{p.name}: queued as #{v['id']} (script {len(script.split())} words). Claude writes title/description/thumbnails.")
+    return v
+
+
+def scan(srv, c):
+    root = Path(c["projects_dir"])
+    now = time.time()
+    for p in sorted(root.iterdir()):
+        if not p.is_dir() or (p / MARK).exists():
+            continue
+        done = finished(p)
+        if not done or done < c["since"]:
+            continue
+        vf = video_file(p)
+        if now - max(done, vf.stat().st_mtime) < c["wait_minutes"] * 60:
+            continue  # give time to add captions / let the file settle
+        try:
+            send(srv, p, c)
+        except (Exception, SystemExit) as e:  # noqa: BLE001  (server/Drive unreachable -> next round)
+            log(f"{p.name}: not sent yet ({e}); will retry")
+
+
+def single_instance():
+    s = socket.socket()
+    try:
+        s.bind(("127.0.0.1", 47831))
+    except OSError:
+        sys.exit("autodoc_sender is already running.")
+    return s
+
+
+def main():
+    a = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    a.add_argument("--list", action="store_true")
+    a.add_argument("--send", nargs="+", metavar="PROJECT")
+    args = a.parse_args()
+    c = conf()
+    root = Path(c["projects_dir"])
+    if args.list:
+        for p in sorted(root.iterdir()):
+            if p.is_dir() and finished(p):
+                m = p / MARK
+                st = f"sent #{json.loads(m.read_text())['video_id']}" if m.exists() else "not sent"
+                print(f"{st:<12} {profile(p):<16} {video_file(p).name:<20} {p.name}")
+        return
+    srv = stq.Server(stq.load_conf())
+    if args.send:
+        for name in args.send:
+            p = root / name
+            if not finished(p):
+                print(f"{name}: not a finished AutoDoc project, skipped")
+                continue
+            if (p / MARK).exists():
+                print(f"{name}: already sent (delete {MARK} in that folder to send again)")
+                continue
+            send(srv, p, c)
+        return
+    lock = single_instance()  # noqa: F841
+    log(f"watching {root} (new renders wait {c['wait_minutes']} min before sending)")
+    while True:
+        try:
+            scan(srv, c)
+        except (Exception, SystemExit):  # noqa: BLE001
+            log("scan error: " + traceback.format_exc(limit=2).replace("\n", " | "))
+        time.sleep(c["check_every_seconds"])
+
+
+if __name__ == "__main__":
+    main()
