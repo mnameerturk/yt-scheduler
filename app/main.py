@@ -14,7 +14,7 @@ from fastapi import Body, Depends, FastAPI, File, HTTPException, Request, Upload
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from PIL import Image, ImageOps
 
-from . import db, google, scheduler, thumbs
+from . import backup, db, google, scheduler, thumbs
 from .config import APP_PASSWORD, BASE_URL, DATA_DIR, DRIVE_MODE, TEST_MODE, TIMEZONE
 from .web import DASHBOARD, LOGIN
 
@@ -49,6 +49,7 @@ def _start():
         logging.warning("APP_PASSWORD is empty: anyone with the address can use this server")
     scheduler.start()
     thumbs.start()
+    backup.start()
 
 
 # ---------- pages ----------
@@ -258,6 +259,14 @@ def _clean(data):
 # ---------- API ----------
 
 api = Depends(need_auth)
+
+
+@app.post("/api/backup-now", dependencies=[Depends(need_auth)])
+def backup_now():
+    try:
+        return {"ok": True, "backup": backup.run(), "last": db.kv_get("last_backup")}
+    except google.GoogleError as e:
+        raise HTTPException(502, f"Drive refused the backup: {str(e)[:200]}")
 
 
 @app.get("/api/health")
