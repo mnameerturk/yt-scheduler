@@ -489,8 +489,9 @@ def start_job(vid):
 
 def book_text(v, job):
     prompts = json.loads(v["thumb_prompts"])[v.get("thumb_append") or 0:]
-    lines = [f"BOOK: {job}", "MODEL: keep", "ASPECT: 16:9", "IMAGES: 1", "WAIT: 15-40",
-             "BREAK EVERY: 8-10", "BREAK LENGTH: 60-120", "RETRIES: 3", ""]
+    # slow, human-like pacing: Google flags fast/regular generation as "unusual activity"
+    lines = [f"BOOK: {job}", "MODEL: keep", "ASPECT: 16:9", "IMAGES: 1", "WAIT: 45-100",
+             "BREAK EVERY: 3-5", "BREAK LENGTH: 180-420", "RETRIES: 2", "MAX PER DAY: 36", ""]
     for k, p in enumerate(prompts, 1):
         lines += [f"PAGE t{k}:", p, ""]
     return "\n".join(lines)
