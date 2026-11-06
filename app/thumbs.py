@@ -551,7 +551,9 @@ def book_text(v, job):
 def next_flow_job():
     now = datetime.now(timezone.utc)
     stale = (now - STALE).replace(microsecond=0).isoformat()
-    db.x("UPDATE videos SET thumb_state='queued' WHERE thumb_state='generating' AND thumb_job_at < ?", (stale,))
+    # only one Flow runs thumbnail jobs, one at a time: when it asks for a new job, any job it took earlier
+    # and never finished (Chrome closed, extension reinstalled, wrong account...) goes back in the queue
+    db.x("UPDATE videos SET thumb_state='queued', thumb_job=NULL WHERE thumb_state='generating'")
     v = db.q("SELECT * FROM videos WHERE thumb_state='queued' ORDER BY COALESCE(publish_at, created_at) LIMIT 1",
              one=True)
     if not v:
