@@ -52,6 +52,8 @@ data class Video(
     val thumbPick: Int? = null, val thumbBy: String? = null, val thumbDeadline: String? = null,
     val thumbVersion: Long = 0,
     val metaState: String? = null, val metaNote: String? = null, val titleOptions: List<String> = emptyList(),
+    val optionPrompts: List<String> = emptyList(), val extraPrompts: List<Pair<String, String>> = emptyList(),
+    val promptsState: String? = null, val promptsNote: String? = null,
 ) {
     val displayTitle get() = title?.takeIf { it.isNotBlank() } ?: fileName ?: "Untitled"
 }
@@ -144,6 +146,11 @@ class Api(ctx: Context) {
             thumbVersion = o.optLong("thumb_version"),
             metaState = o.str("meta_state"), metaNote = o.str("meta_note"),
             titleOptions = (o.optJSONArray("title_options") ?: JSONArray()).let { a -> (0 until a.length()).map { a.getString(it) } },
+            optionPrompts = (o.optJSONArray("option_prompts") ?: JSONArray()).let { a -> (0 until a.length()).map { a.optString(it) } },
+            extraPrompts = (o.optJSONArray("extra_prompts") ?: JSONArray()).let { a ->
+                (0 until a.length()).map { a.getJSONObject(it).let { e -> e.optString("label") to e.optString("prompt") } }
+            },
+            promptsState = o.str("prompts_state"), promptsNote = o.str("prompts_note"),
         )
     }
 
@@ -181,6 +188,10 @@ class Api(ctx: Context) {
     suspend fun moreThumbnails(id: Int, kind: String = "new", option: Int? = null, note: String = ""): Video =
         parseVideo(JSONObject(request("POST", "/api/videos/$id/more-thumbnails", JSONObject().put("kind", kind)
             .put("option", option ?: JSONObject.NULL).put("note", note))))
+    /** Thumbnail prompts only (to paste into Flow by hand): kind "new" or "like" + option. */
+    suspend fun morePrompts(id: Int, kind: String = "new", option: Int? = null): Video =
+        parseVideo(JSONObject(request("POST", "/api/videos/$id/more-prompts", JSONObject().put("kind", kind)
+            .put("option", option ?: JSONObject.NULL))))
     suspend fun retryFlow(id: Int): Video = parseVideo(JSONObject(request("POST", "/api/videos/$id/retry-flow")))
     suspend fun autoThumbnail(id: Int): Video = parseVideo(JSONObject(request("POST", "/api/videos/$id/auto-thumbnail")))
     suspend fun pickThumbnail(id: Int, n: Int): Video =

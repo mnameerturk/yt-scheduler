@@ -58,6 +58,10 @@ TOOLS = [
               "option": {"type": "integer"}, "note": {"type": "string"}}, ["video_id", "kind"])),
     ("retry_flow", "Thumbnails stuck (Google flag / stuck prompt): start this video's thumbnails again in a new Flow "
      "project with the same prompts. Only after the user checked Flow works again.", _schema(VID, ["video_id"])),
+    ("more_prompts", "Write thumbnail PROMPTS only (no images) for nmr to paste into Flow by hand: kind=new (3 new ideas) "
+     "or kind=like with option N (3 similar to that option). Read them later with get_video (extra_prompts).",
+     _schema({**VID, "kind": {"type": "string", "enum": ["new", "like"]}, "option": {"type": "integer"}},
+             ["video_id", "kind"])),
     ("post_now", "Upload this video to YouTube right now.", _schema(VID, ["video_id"])),
     ("retry_video", "Retry a failed upload.", _schema(VID, ["video_id"])),
     ("delete_video", "Delete a video from the scheduler and its Drive copy (not from YouTube). Only after the user "
@@ -123,6 +127,9 @@ def run_tool(m, name, a):
         else:
             m.more_thumbnails(vid, {"kind": kind, "option": a.get("option"), "note": a.get("note", "")})
         return "Started. Claude writes the prompts, then Flow makes them (a few minutes); use view_thumbnails later."
+    if name == "more_prompts":
+        m.more_prompts(vid, {"kind": a["kind"], "option": a.get("option")})
+        return "Claude is writing them; check get_video (extra_prompts) in a minute or two."
     if name == "retry_flow":
         return _short(m.retry_flow(vid))
     if name == "post_now":

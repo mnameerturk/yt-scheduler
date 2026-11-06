@@ -205,15 +205,14 @@ fun EditorScreen(videoId: Int, onBack: () -> Unit) {
                 OutlinedButton(onClick = { act { fill(api.autoThumbnail(videoId)) } }, enabled = !busy && !making) {
                     Text(if (v.thumbState == null) "Make 6 with Flow" else "Remake 6")
                 }
-                if (v.thumbOptions > 0) {
-                    OutlinedButton(onClick = { act { fill(api.moreThumbnails(videoId)); toast(ctx, "Making 3 more…") } }, enabled = !busy && !making) {
-                        Text("+ 3 more")
-                    }
-                }
             }
+            if (v.status != "posting") OutlinedButton(
+                onClick = { act { fill(api.morePrompts(videoId)); toast(ctx, "Claude is writing 3 new prompts…") } },
+                enabled = !busy && v.promptsState != "writing", modifier = Modifier.fillMaxWidth()
+            ) { Text("+ 3 more prompts (to paste in Flow)") }
             if (v.thumbState in listOf("generating", "queued", "failed")) {
                 Text(
-                    "Stuck or flagged? First check in the remote screen that Flow makes an image by hand, then:",
+                    "Thumbnails are made by Flow in Chrome on your PC (when it's on). Stuck or flagged? Check Flow works by hand there, then:",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 OutlinedButton(enabled = !busy, modifier = Modifier.fillMaxWidth(), onClick = {
@@ -221,7 +220,7 @@ fun EditorScreen(videoId: Int, onBack: () -> Unit) {
                 }) { Text("Retry in Flow (new project)") }
             }
             FlowThumbs(api, v, busy,
-                onLike = { n -> act { fill(api.moreThumbnails(videoId, "like", n)); toast(ctx, "Making 3 like option $n…") } },
+                onLike = { n -> act { fill(api.morePrompts(videoId, "like", n)); toast(ctx, "Claude is writing 3 prompts like option $n…") } },
                 onEdit = { n, note -> act { fill(api.moreThumbnails(videoId, "edit", n, note)); toast(ctx, "Making an edited copy of option $n…") } },
             ) { n ->
                 act {
@@ -237,6 +236,7 @@ fun EditorScreen(videoId: Int, onBack: () -> Unit) {
                 Button(onClick = { openUrl(ctx, url) }) { Text("Open on YouTube") }
             }
 
+            ExtraPrompts(v)
             TitleOptions(v, wordsEditable && !busy, onMore = { act { fill(api.moreTitles(videoId)); toast(ctx, "Writing 3 more titles…") } }) { t ->
                 act { fill(api.update(videoId, JSONObject().put("title", t))); toast(ctx, if (v.status == "posted") "Title updated on YouTube" else "Title set") }
             }
@@ -420,7 +420,15 @@ private fun FlowThumbs(
                 Row {
                     TextButton(onClick = { onLike(n) }, enabled = !busy && canPick && !making,
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp)) {
-                        Text("3 like this", style = MaterialTheme.typography.labelMedium)
+                        Text("Similar", style = MaterialTheme.typography.labelMedium)
+                    }
+                    val clip = androidx.compose.ui.platform.LocalClipboardManager.current
+                    TextButton(onClick = {
+                        val p = v.optionPrompts.getOrNull(n - 1).orEmpty()
+                        if (p.isBlank()) toast(ctx, "No prompt saved for this one")
+                        else { clip.setText(androidx.compose.ui.text.AnnotatedString(p)); toast(ctx, "Prompt $n copied") }
+                    }, contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp)) {
+                        Text("Copy", style = MaterialTheme.typography.labelMedium)
                     }
                     TextButton(onClick = { editing = n }, enabled = !busy && canPick && !making,
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp)) {
@@ -457,4 +465,25 @@ private fun TitleOptions(v: Video, enabled: Boolean, onMore: () -> Unit, onPick:
     TextButton(onClick = onMore, enabled = enabled && v.metaState !in listOf("summarizing", "writing", "more")) {
         Text("+ 3 more titles")
     }
+}
+
+/** Prompts Claude wrote on request (no images): copy one and paste it into Flow by hand. */
+@Composable
+private fun ExtraPrompts(v: Video) {
+    val ctx = LocalContext.current
+    val clip = androidx.compose.ui.platform.LocalClipboardManager.current
+    if (v.promptsState == "writing") Text("Claude is writing prompts…", style = MaterialTheme.typography.bodySmall)
+    v.promptsNote?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+    if (v.extraPrompts.isEmpty()) return
+    Text("Prompts to paste in Flow", style = MaterialTheme.typography.labelLarge)
+    v.extraPrompts.forEachIndexed { i, (label, prompt) ->
+        OutlinedButton(onClick = {
+            clip.setText(androidx.compose.ui.text.AnnotatedString(prompt)); toast(ctx, "Prompt ${i + 1} copied")
+        }, modifier = Modifier.fillMaxWidth()) {
+            Text("${i + 1}. ($label) $prompt", maxLines = 3, overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall, modifier = Modifier.fillMaxWidth())
+        }
+    }
+    Text("Tap to copy. Made the image yourself? Use \"Own image\" to add it.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }

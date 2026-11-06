@@ -52,6 +52,7 @@ class StatusWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                     "ready" -> "Pick a thumbnail"
                     "picked" -> "Thumbnail picked"
                     "meta" -> "Title & description ready"
+                    "prompts" -> "Thumbnail prompts ready"
                     else -> "Flow needs you"
                 }
                 postNote(applicationContext, 100000 + e.seq, title, e.text)

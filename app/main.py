@@ -209,6 +209,9 @@ def _video_out(v):
         "thumb_deadline_local": _local(dl.isoformat()) if (dl := thumbs.deadline(v)) else None,
         "meta_state": v.get("meta_state"), "meta_note": v.get("meta_note"),
         "title_options": json.loads(v.get("meta_titles") or "[]"),
+        "option_prompts": [thumbs.option_prompt(v, k) for k in range(1, len(json.loads(v.get("thumb_options") or "[]")) + 1)],
+        "extra_prompts": json.loads(v.get("extra_prompts") or "[]"),
+        "prompts_state": v.get("prompts_state"), "prompts_note": v.get("prompts_note"),
         "thumb_version": int(Path(v["thumb_path"]).stat().st_mtime) if v["thumb_path"] and Path(v["thumb_path"]).exists() else 0,
     }
 
@@ -514,7 +517,7 @@ def flow_next():
 
 @app.post("/api/flow/done", dependencies=[api])
 def flow_done(data: dict = Body(...)):
-    return thumbs.flow_done(str(data.get("job", "")))
+    return thumbs.flow_done(str(data.get("job", "")), data.get("images"))
 
 
 @app.get("/api/flow/command", dependencies=[api])
@@ -575,3 +578,16 @@ import sys as _sys  # noqa: E402
 from . import mcp_server  # noqa: E402
 
 mcp_server.register(app, _sys.modules[__name__])
+
+
+@app.post("/api/videos/{vid}/more-prompts", dependencies=[api])
+def more_prompts(vid: int, data: dict = Body(default={})):
+    """Thumbnail prompts only, to paste into Flow by hand: kind=new (3 new ideas) or like + option (3 similar)."""
+    v = _get_video(vid)
+    if v.get("prompts_state") == "writing":
+        raise HTTPException(409, "Claude is already writing prompts for this video")
+    try:
+        thumbs.start_more_prompts(vid, str(data.get("kind") or "new"), int(data["option"]) if data.get("option") else None)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _video_out(_get_video(vid))

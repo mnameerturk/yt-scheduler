@@ -48,7 +48,8 @@ _wake = threading.Event()
 COLS = {"thumb_state": "TEXT", "thumb_prompts": "TEXT", "thumb_options": "TEXT", "thumb_pick": "INTEGER",
         "thumb_by": "TEXT", "thumb_note": "TEXT", "thumb_job": "TEXT", "thumb_job_at": "TEXT",
         "thumb_deadline": "TEXT", "meta_state": "TEXT", "meta_titles": "TEXT", "meta_note": "TEXT",
-        "script_path": "TEXT", "thumb_append": "INTEGER", "thumb_req": "TEXT", "thumb_opt_prompts": "TEXT"}
+        "script_path": "TEXT", "thumb_append": "INTEGER", "thumb_req": "TEXT", "thumb_opt_prompts": "TEXT",
+        "prompts_state": "TEXT", "prompts_req": "TEXT", "prompts_note": "TEXT", "extra_prompts": "TEXT"}
 
 
 def migrate():
@@ -445,6 +446,37 @@ def take_flow_command():
     return cmd
 
 
+def start_more_prompts(vid, kind="new", option=None):
+    """Text prompts only (no Flow): 3 new ideas, or 3 similar to option N. For pasting into Flow by hand."""
+    v = db.q("SELECT thumb_options FROM videos WHERE id=?", (vid,), one=True)
+    have = len(json.loads(v["thumb_options"] or "[]"))
+    if kind == "like" and not (option and 1 <= option <= have):
+        raise ValueError("no such option")
+    db.update("videos", vid, prompts_state="writing",
+              prompts_req=json.dumps({"kind": kind, "option": option}))
+    wake()
+
+
+def _prompts_tick():
+    for v in db.q("SELECT * FROM videos WHERE prompts_state='writing' ORDER BY id"):
+        req = json.loads(v["prompts_req"] or "{}")
+        extra = json.loads(v["extra_prompts"] or "[]")
+        try:
+            if req.get("kind") == "like":
+                new = write_variants(v, {"kind": "like", "option": req["option"]})
+                label = f"like option {req['option']}"
+            else:
+                avoid = json.loads(v["thumb_prompts"] or "[]") + [e["prompt"] for e in extra]
+                new = write_prompts(v, n=MORE, avoid=avoid)
+                label = "new idea"
+            extra += [{"label": label, "prompt": p} for p in new]
+            db.update("videos", v["id"], prompts_state=None, extra_prompts=json.dumps(extra), prompts_note=None)
+            _event("prompts", v["id"], f"{len(new)} new thumbnail prompts: {v.get('title') or v['file_name']}")
+        except Exception as e:  # noqa: BLE001
+            log.warning("prompt writing failed for %s: %s", v["id"], e)
+            db.update("videos", v["id"], prompts_state=None, prompts_note=f"Claude could not write them: {str(e)[:150]}")
+
+
 def option_prompt(v, n):
     """The prompt that made option n (best effort for options made before this was tracked)."""
     op = json.loads(v.get("thumb_opt_prompts") or "[]")
@@ -541,10 +573,25 @@ def _save_jpeg(src, dst):
     Path(dst).write_bytes(buf.getvalue())
 
 
-def flow_done(job):
+def _save_uploads(job, images):
+    """Images uploaded by the extension (Flow running on the PC) -> FLOW_DIR/job/t1_v1.png ..."""
+    import base64
+    src = FLOW_DIR / job
+    src.mkdir(parents=True, exist_ok=True)
+    for im in images or []:
+        name = re.sub(r"[^a-zA-Z0-9]", "", str(im.get("name", "")))[:20]
+        m = re.match(r"data:image/(png|jpe?g|webp);base64,(.*)$", str(im.get("data", "")), re.S)
+        if name and m:
+            ext = "jpg" if m[1].startswith("jp") else m[1]
+            (src / f"{name}_v1.{ext}").write_bytes(base64.b64decode(m[2]))
+
+
+def flow_done(job, images=None):
     v = db.q("SELECT * FROM videos WHERE thumb_job=?", (job,), one=True)
     if not v:
         return {"ok": False, "error": "unknown job (video deleted?)"}
+    if images:
+        _save_uploads(job, images)
     src = FLOW_DIR / job
     files = sorted((f for f in src.glob("t*_v*.*") if re.match(r"t\d+_v\d+\.(jpe?g|png|webp)$", f.name, re.I)),
                    key=lambda f: [int(n) for n in re.findall(r"\d+", f.name)])
@@ -623,6 +670,7 @@ def apply_pick(vid, n, by="you", why=""):
 
 def _tick():
     _meta_tick()
+    _prompts_tick()
     # thumbnails for videos without a script (with a script, the meta step writes the prompts)
     for v in db.q("SELECT * FROM videos WHERE thumb_state='prompting' AND (meta_state IS NULL OR meta_state "
                   "IN ('failed','ready')) ORDER BY id"):
