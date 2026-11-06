@@ -181,6 +181,7 @@ class Api(ctx: Context) {
     suspend fun moreThumbnails(id: Int, kind: String = "new", option: Int? = null, note: String = ""): Video =
         parseVideo(JSONObject(request("POST", "/api/videos/$id/more-thumbnails", JSONObject().put("kind", kind)
             .put("option", option ?: JSONObject.NULL).put("note", note))))
+    suspend fun retryFlow(id: Int): Video = parseVideo(JSONObject(request("POST", "/api/videos/$id/retry-flow")))
     suspend fun autoThumbnail(id: Int): Video = parseVideo(JSONObject(request("POST", "/api/videos/$id/auto-thumbnail")))
     suspend fun pickThumbnail(id: Int, n: Int): Video =
         parseVideo(JSONObject(request("POST", "/api/videos/$id/thumb-pick", JSONObject().put("option", n))))

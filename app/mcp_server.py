@@ -56,6 +56,8 @@ TOOLS = [
      "option N. kind=edit: 1 edited copy of option N following note (e.g. 'make the text bigger').",
      _schema({**VID, "kind": {"type": "string", "enum": ["remake", "new", "like", "edit"]},
               "option": {"type": "integer"}, "note": {"type": "string"}}, ["video_id", "kind"])),
+    ("retry_flow", "Thumbnails stuck (Google flag / stuck prompt): start this video's thumbnails again in a new Flow "
+     "project with the same prompts. Only after the user checked Flow works again.", _schema(VID, ["video_id"])),
     ("post_now", "Upload this video to YouTube right now.", _schema(VID, ["video_id"])),
     ("retry_video", "Retry a failed upload.", _schema(VID, ["video_id"])),
     ("delete_video", "Delete a video from the scheduler and its Drive copy (not from YouTube). Only after the user "
@@ -121,6 +123,8 @@ def run_tool(m, name, a):
         else:
             m.more_thumbnails(vid, {"kind": kind, "option": a.get("option"), "note": a.get("note", "")})
         return "Started. Claude writes the prompts, then Flow makes them (a few minutes); use view_thumbnails later."
+    if name == "retry_flow":
+        return _short(m.retry_flow(vid))
     if name == "post_now":
         return _short(m.post_now(vid))
     if name == "retry_video":

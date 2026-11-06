@@ -517,6 +517,20 @@ def flow_done(data: dict = Body(...)):
     return thumbs.flow_done(str(data.get("job", "")))
 
 
+@app.get("/api/flow/command", dependencies=[api])
+def flow_command():
+    return thumbs.take_flow_command()
+
+
+@app.post("/api/videos/{vid}/retry-flow", dependencies=[api])
+def retry_flow(vid: int):
+    v = _get_video(vid)
+    if v.get("thumb_state") not in ("generating", "queued", "failed"):
+        raise HTTPException(409, "nothing to retry; use Remake or + 3 more")
+    thumbs.retry_flow(vid)
+    return _video_out(_get_video(vid))
+
+
 @app.post("/api/flow/status", dependencies=[api])
 def flow_status(data: dict = Body(...)):
     thumbs.flow_status(str(data.get("job") or ""), str(data.get("status", "")), str(data.get("message") or ""))

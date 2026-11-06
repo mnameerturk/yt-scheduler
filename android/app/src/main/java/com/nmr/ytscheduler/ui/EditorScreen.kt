@@ -211,6 +211,15 @@ fun EditorScreen(videoId: Int, onBack: () -> Unit) {
                     }
                 }
             }
+            if (v.thumbState in listOf("generating", "queued", "failed")) {
+                Text(
+                    "Stuck or flagged? First check in the remote screen that Flow makes an image by hand, then:",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedButton(enabled = !busy, modifier = Modifier.fillMaxWidth(), onClick = {
+                    act { fill(api.retryFlow(videoId)); toast(ctx, "Starting again in a new Flow project (within a minute)") }
+                }) { Text("Retry in Flow (new project)") }
+            }
             FlowThumbs(api, v, busy,
                 onLike = { n -> act { fill(api.moreThumbnails(videoId, "like", n)); toast(ctx, "Making 3 like option $n…") } },
                 onEdit = { n, note -> act { fill(api.moreThumbnails(videoId, "edit", n, note)); toast(ctx, "Making an edited copy of option $n…") } },

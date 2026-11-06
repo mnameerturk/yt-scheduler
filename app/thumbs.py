@@ -426,6 +426,25 @@ def start_more_thumbs(vid, kind="new", option=None, note=""):
     wake()
 
 
+def retry_flow(vid):
+    """Run the same prompts again in a new Flow project (after a flag / stuck run)."""
+    v = db.q("SELECT * FROM videos WHERE id=?", (vid,), one=True)
+    if not v["thumb_prompts"]:
+        start_job(vid)
+        return
+    db.update("videos", vid, thumb_state="queued", thumb_job=None, thumb_job_at=None,
+              thumb_note="retry: waiting for Flow (new project)")
+    db.kv_set("flow_cmd", {"cmd": "reset", "at": db.now_iso()})
+    db.kv_set("flow_alert", {})
+
+
+def take_flow_command():
+    cmd = db.kv_get("flow_cmd", None) or {}
+    if cmd:
+        db.kv_set("flow_cmd", {})
+    return cmd
+
+
 def option_prompt(v, n):
     """The prompt that made option n (best effort for options made before this was tracked)."""
     op = json.loads(v.get("thumb_opt_prompts") or "[]")
