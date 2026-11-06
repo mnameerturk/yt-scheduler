@@ -545,3 +545,10 @@ def more_thumbnails(vid: int, data: dict = Body(default={})):
     except (ValueError, KeyError) as e:
         raise HTTPException(400, str(e))
     return _video_out(_get_video(vid))
+
+
+# ---------- Claude connector (remote MCP) ----------
+import sys as _sys  # noqa: E402
+from . import mcp_server  # noqa: E402
+
+mcp_server.register(app, _sys.modules[__name__])

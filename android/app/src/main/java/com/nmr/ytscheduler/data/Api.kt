@@ -203,6 +203,9 @@ class Api(ctx: Context) {
     suspend fun connectLink(kind: String): String =
         JSONObject(request("POST", "/api/connect-link", JSONObject().put("kind", kind))).getString("url")
 
+    suspend fun mcpUrl(): String = JSONObject(request("GET", "/api/mcp-url")).getString("url")
+    suspend fun resetMcpUrl(): String = JSONObject(request("POST", "/api/mcp-url/reset")).getString("url")
+
     suspend fun setStorage(accountId: Int) { request("POST", "/api/accounts/$accountId/storage") }
     suspend fun removeAccount(accountId: Int) { request("DELETE", "/api/accounts/$accountId") }
 

@@ -177,6 +177,23 @@ fun SettingsScreen(firstRun: Boolean, onDone: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 TextButton(onClick = { reload++ }) { Text("Refresh list") }
+
+                HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                Text("Use with Claude", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "In Claude: Settings → Connectors → Add custom connector, name it NMR Scheduler and paste this link. " +
+                        "Keep the link private: it gives full control of the scheduler.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                val clip = androidx.compose.ui.platform.LocalClipboardManager.current
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(enabled = !busy, onClick = {
+                        act { clip.setText(androidx.compose.ui.text.AnnotatedString(api.mcpUrl())); toast(ctx, "Link copied") }
+                    }) { Text("Copy Claude link") }
+                    TextButton(enabled = !busy, onClick = {
+                        act { clip.setText(androidx.compose.ui.text.AnnotatedString(api.resetMcpUrl())); toast(ctx, "New link copied; the old one stops working") }
+                    }) { Text("New link") }
+                }
                 TextButton(onClick = { openUrl(ctx, prefs.server) }) { Text("Open web dashboard") }
             }
         }
