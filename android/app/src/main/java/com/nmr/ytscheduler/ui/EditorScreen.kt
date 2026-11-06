@@ -369,7 +369,7 @@ private fun FlowThumbs(api: Api, v: Video, busy: Boolean, onPick: (Int) -> Unit)
                     )
                     Text(
                         "$n", color = Color.White, style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.padding(6.dp).background(Color(0x99000000), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp)
+                        modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp).background(Color(0x99000000), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp)
                     )
                 }
             }

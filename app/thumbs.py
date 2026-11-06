@@ -161,14 +161,18 @@ PROMPT_RULES = """You write image prompts for YouTube thumbnails. Each prompt is
 and the image is used AS IS: it must be the complete, finished thumbnail. Nothing gets edited afterwards.
 {refs}
 Write {n} DIFFERENT thumbnail prompts for the video below, aimed at the highest click-through rate:
-- copy the channel's proven style closely (layout, text treatment, colours, arrows, background, lighting), but with
-  new subjects and hooks that fit THIS video
+- THE SUBJECT RULE (most important): every thumbnail must show what THIS video is actually about: the exact
+  animal/object/person/place of this story (e.g. a video about a grizzly shows that grizzly in every option). The
+  reference thumbnails are only for STYLE; never take their subjects (their tiger, elephant, lion, sword…) unless
+  this video is about that same thing. Any second element (object, person, prey, place) must come from this story.
+- copy the channel's proven style closely (layout, text treatment, colours, arrows, background, lighting)
 - include EVERYTHING in the prompt: the exact overlay text in double quotes (2-4 words, spelled exactly), its font look,
   colours (which word is red), outline/shadow, banner, size and position; every arrow (colour, style, where it points);
   any cut-out objects; the background. Say "no other text anywhere in the image"
 - one clear focal subject, big and readable on a small phone screen; strong contrast; a curiosity gap that teases the title
-  without repeating it
-- vary the {n} concepts (different hero subject, hook text, angle or composition) so the creator gets real choice
+  without repeating it; the hook text must tease a real moment or fact from THIS story, not a generic line
+- vary the {n} concepts WITHIN this story: different hook text, moment of the story, pose/expression, angle,
+  secondary story element or composition, so the creator gets real choice. Never swap in a different animal/object
 - never include a video duration timestamp, channel logo, watermark or YouTube UI
 - each prompt 70-140 words, ending with: wide 16:9 YouTube thumbnail
 {style}
@@ -200,8 +204,8 @@ def write_prompts(v, n=OPTIONS, avoid=()):
                                channel=ch.get("channel_title") or "", desc=desc,
                                refs=ref_text, style=f"Channel thumbnail style guide:\n{style}" if style else "")
     if avoid:
-        text += ("\n\nThese concepts were already made; write COMPLETELY DIFFERENT ones (new subject, hook text "
-                 "and composition):\n- " + "\n- ".join(a[:300] for a in avoid))
+        text += ("\n\nThese concepts were already made; write COMPLETELY DIFFERENT ones (new hook text, "
+                 "story moment, pose and composition), still showing THIS video's own subject:\n- " + "\n- ".join(a[:300] for a in avoid))
     prompts = _json_in(ask_claude(text, work, model=WRITER_MODEL, effort=WRITER_EFFORT), "[")
     prompts = [re.sub(r"\s+", " ", str(p)).strip() for p in prompts if str(p).strip()][:n]
     if len(prompts) < min(2, n):
@@ -266,7 +270,13 @@ Write:
    overlay text in double quotes (2-4 words, spelled exactly, it must not just repeat the title), font look, colours
    (which word is red), outline/shadow, banner, size and position; every arrow (colour, style, where it points); any
    cut-out objects; the background; and say "no other text anywhere in the image". Copy the channel's proven
-   thumbnail style closely with new subjects. Vary the {n} concepts. One clear focal subject readable on a phone.
+   thumbnail style closely.
+   THE SUBJECT RULE (most important): every thumbnail must show what THIS video is actually about: the exact
+   animal/object/person/place of this story (e.g. a video about a grizzly shows that grizzly in every option). The
+   reference thumbnails are only for STYLE; never take their subjects (their tiger, elephant, lion, sword…) unless
+   this video is about that same thing. Any second element (object, person, prey, place) must come from this story.
+   Vary the {n} concepts WITHIN this story (hook text, story moment, pose, angle, secondary story element), never by
+   swapping in a different animal/object. One clear focal subject readable on a phone.
    Never a duration timestamp, logo, watermark or YouTube UI. 70-140 words each, ending with: wide 16:9 YouTube thumbnail
 
 Channel style guide:
