@@ -27,6 +27,9 @@ class Prefs(ctx: Context) {
     var seeded: Boolean
         get() = sp.getBoolean("seeded", false)
         set(v) = sp.edit().putBoolean("seeded", v).apply()
+    var lastEvent: Int
+        get() = sp.getInt("lastEvent", -1)
+        set(v) = sp.edit().putInt("lastEvent", v).apply()
     val configured get() = server.isNotBlank() && password.isNotBlank()
 }
 
@@ -37,12 +40,17 @@ data class Channel(
 
 data class Playlist(val id: String, val title: String)
 
+data class Event(val seq: Int, val kind: String, val videoId: Int, val text: String)
+
 data class Video(
     val id: Int, val status: String, val title: String?, val description: String,
     val tags: List<String>, val categoryId: String?, val madeForKids: Boolean, val synthetic: Boolean,
     val playlistId: String?, val channelAccountId: Int?, val channel: String?,
     val publishAt: Instant?, val postedAtLocal: String?, val fileName: String?, val fileSize: Long,
     val youtubeUrl: String?, val hasThumbnail: Boolean, val error: String?,
+    val thumbState: String? = null, val thumbNote: String? = null, val thumbOptions: Int = 0,
+    val thumbPick: Int? = null, val thumbBy: String? = null, val thumbDeadline: String? = null,
+    val thumbVersion: Long = 0,
 ) {
     val displayTitle get() = title?.takeIf { it.isNotBlank() } ?: fileName ?: "Untitled"
 }
@@ -83,14 +91,14 @@ class Api(ctx: Context) {
                 val msg = when {
                     code == 401 -> "Wrong app password"
                     !detail.isNullOrBlank() -> detail
-                    text.contains("ngrok", true) && code >= 500 -> "Server is offline (is the PC on?)"
+                    code == 502 || code == 503 -> "Server is offline or restarting"
                     else -> "Server error $code"
                 }
                 throw ApiException(code, msg)
             }
             text
         } catch (e: java.io.IOException) {
-            throw ApiException(0, "Can't reach the server. Is the PC on and online?")
+            throw ApiException(0, "Can't reach the server. Check your internet.")
         } finally {
             conn.disconnect()
         }
@@ -130,6 +138,9 @@ class Api(ctx: Context) {
             postedAtLocal = o.str("posted_at_local"), fileName = o.str("file_name"),
             fileSize = if (o.isNull("file_size")) 0L else o.optLong("file_size"),
             youtubeUrl = o.str("youtube_url"), hasThumbnail = o.optBoolean("has_thumbnail"), error = o.str("error"),
+            thumbState = o.str("thumb_state"), thumbNote = o.str("thumb_note"), thumbOptions = o.optInt("thumb_options"),
+            thumbPick = o.int("thumb_pick"), thumbBy = o.str("thumb_by"), thumbDeadline = o.str("thumb_deadline_local"),
+            thumbVersion = o.optLong("thumb_version"),
         )
     }
 
@@ -160,6 +171,25 @@ class Api(ctx: Context) {
     }
 
     fun thumbnailUrl(id: Int) = "$base/api/videos/$id/thumbnail"
+    fun thumbOptionUrl(id: Int, n: Int) = "$base/api/videos/$id/thumb-options/$n"
+
+    suspend fun autoThumbnail(id: Int): Video = parseVideo(JSONObject(request("POST", "/api/videos/$id/auto-thumbnail")))
+    suspend fun pickThumbnail(id: Int, n: Int): Video =
+        parseVideo(JSONObject(request("POST", "/api/videos/$id/thumb-pick", JSONObject().put("option", n))))
+
+    suspend fun events(after: Int): List<Event> {
+        val arr = JSONArray(request("GET", "/api/events?after=$after"))
+        return (0 until arr.length()).map {
+            val o = arr.getJSONObject(it)
+            Event(o.getInt("seq"), o.getString("kind"), o.optInt("video_id"), o.getString("text"))
+        }
+    }
+
+    suspend fun thumbStyle(accountId: Int): String =
+        JSONObject(request("GET", "/api/thumb-style/$accountId")).optString("style")
+    suspend fun setThumbStyle(accountId: Int, style: String) {
+        request("PUT", "/api/thumb-style/$accountId", JSONObject().put("style", style))
+    }
 
     suspend fun connectLink(kind: String): String =
         JSONObject(request("POST", "/api/connect-link", JSONObject().put("kind", kind))).getString("url")

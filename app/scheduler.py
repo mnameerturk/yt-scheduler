@@ -52,6 +52,9 @@ def cleanup():
         if v["thumb_path"]:
             from pathlib import Path
             Path(v["thumb_path"]).unlink(missing_ok=True)
+        import shutil
+        from .thumbs import OPT_DIR
+        shutil.rmtree(OPT_DIR / str(v["id"]), ignore_errors=True)
         db.x("DELETE FROM videos WHERE id=?", (v["id"],))
 
 

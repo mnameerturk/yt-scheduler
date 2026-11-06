@@ -11,6 +11,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -56,6 +57,8 @@ fun SettingsScreen(firstRun: Boolean, onDone: () -> Unit) {
     var password by remember { mutableStateOf(prefs.password) }
     var status by remember { mutableStateOf<String?>(null) }
     var channels by remember { mutableStateOf<List<Channel>>(emptyList()) }
+    var styleFor by remember { mutableStateOf<Channel?>(null) }
+    var styleText by remember { mutableStateOf("") }
     var reload by remember { mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(false) }
 
@@ -74,6 +77,32 @@ fun SettingsScreen(firstRun: Boolean, onDone: () -> Unit) {
         scope.launch {
             try { block() } catch (e: Exception) { toast(ctx, e.message ?: "Something went wrong") } finally { busy = false }
         }
+    }
+
+    styleFor?.let { c ->
+        AlertDialog(
+            onDismissRequest = { styleFor = null },
+            title = { Text("Thumbnail style · ${c.title ?: ""}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Claude follows this when it writes the Flow prompts for this channel. " +
+                            "Example: photorealistic cinematic, one huge subject, black background, 2-3 bold yellow words.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedTextField(value = styleText, onValueChange = { styleText = it.take(1500) },
+                        minLines = 4, modifier = Modifier.fillMaxWidth())
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val id = c.id
+                    act { api.setThumbStyle(id, styleText.trim()); toast(ctx, "Style saved") }
+                    styleFor = null
+                }) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { styleFor = null }) { Text("Cancel") } }
+        )
     }
 
     Scaffold(
@@ -129,6 +158,8 @@ fun SettingsScreen(firstRun: Boolean, onDone: () -> Unit) {
                     act { api.setStorage(c.id); reload++ }
                 }, onRemove = {
                     act { api.removeAccount(c.id); reload++ }
+                }, onStyle = {
+                    act { styleText = api.thumbStyle(c.id); styleFor = c }
                 }) }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(enabled = !busy, onClick = { act { openUrl(ctx, api.connectLink("youtube")) } }) {
@@ -150,7 +181,7 @@ fun SettingsScreen(firstRun: Boolean, onDone: () -> Unit) {
 }
 
 @Composable
-private fun AccountCard(c: Channel, busy: Boolean, onStorage: () -> Unit, onRemove: () -> Unit) {
+private fun AccountCard(c: Channel, busy: Boolean, onStorage: () -> Unit, onRemove: () -> Unit, onStyle: () -> Unit) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp)) {
             Text(c.title ?: "Drive only", fontWeight = FontWeight.SemiBold)
@@ -163,6 +194,7 @@ private fun AccountCard(c: Channel, busy: Boolean, onStorage: () -> Unit, onRemo
             Text(badges.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (c.hasDrive && !c.isStorage) TextButton(enabled = !busy, onClick = onStorage) { Text("Use this Drive") }
+                if (c.channelId != null) TextButton(enabled = !busy, onClick = onStyle) { Text("Thumbnail style") }
                 TextButton(enabled = !busy, onClick = onRemove) { Text("Remove") }
             }
         }

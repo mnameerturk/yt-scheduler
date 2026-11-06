@@ -3,6 +3,16 @@ package com.nmr.ytscheduler.ui
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -186,8 +196,21 @@ fun EditorScreen(videoId: Int, onBack: () -> Unit) {
                     if (v.fileSize > 0) Text("${v.fileSize / 1024 / 1024} MB", style = MaterialTheme.typography.bodySmall)
                 }
             }
-            if (editable) OutlinedButton(onClick = { pickThumb.launch("image/*") }, enabled = !busy) {
-                Text(if (v.hasThumbnail) "Change thumbnail" else "Add thumbnail")
+            if (v.status != "posting") Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { pickThumb.launch("image/*") }, enabled = !busy) {
+                    Text(if (v.hasThumbnail) "Own thumbnail" else "Add own thumbnail")
+                }
+                val making = v.thumbState in listOf("prompting", "queued", "generating")
+                OutlinedButton(onClick = { act { fill(api.autoThumbnail(videoId)) } }, enabled = !busy && !making) {
+                    Text(if (v.thumbState == null) "Make 6 with Flow" else "Remake with Flow")
+                }
+            }
+            FlowThumbs(api, v, busy) { n ->
+                act {
+                    fill(api.pickThumbnail(videoId, n))
+                    thumbVersion = System.currentTimeMillis()
+                    toast(ctx, if (v.status == "posted") "Thumbnail changed on YouTube" else "Thumbnail picked")
+                }
             }
             if (!v.error.isNullOrBlank()) {
                 Text(v.error.orEmpty(), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -296,5 +319,50 @@ private fun SwitchRow(label: String, checked: Boolean, enabled: Boolean, onChang
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(label, modifier = Modifier.weight(1f))
         Switch(checked = checked, onCheckedChange = onChange, enabled = enabled)
+    }
+}
+
+/** The Flow options: tap one to use it. Shown while picking and after a pick (to switch). */
+@Composable
+private fun FlowThumbs(api: Api, v: Video, busy: Boolean, onPick: (Int) -> Unit) {
+    val ctx = LocalContext.current
+    val note = when (v.thumbState) {
+        "prompting" -> "Claude is writing 6 thumbnail prompts…"
+        "queued" -> "Waiting for Flow on the server…"
+        "generating" -> "Flow is making the thumbnails (about 5–10 min)…"
+        "ready" -> "Tap the one you want." + (v.thumbDeadline?.let { " If you don't, Claude picks at $it." } ?: "")
+        "picked" -> if (v.thumbBy == "Claude") "Claude picked option ${v.thumbPick}. Tap another to switch." else "Option ${v.thumbPick} in use. Tap another to switch."
+        "failed" -> "Flow thumbnails failed. Tap Remake with Flow."
+        else -> null
+    } ?: return
+    Text(note, style = MaterialTheme.typography.bodySmall)
+    v.thumbNote?.takeIf { v.thumbState in listOf("failed", "generating", "picked") }?.let {
+        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    if (v.thumbOptions <= 0 || v.thumbState !in listOf("ready", "picked")) return
+    (1..v.thumbOptions).chunked(2).forEach { pair ->
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            pair.forEach { n ->
+                val chosen = v.thumbPick == n && v.thumbState == "picked"
+                val req = ImageRequest.Builder(ctx)
+                    .data(api.thumbOptionUrl(v.id, n) + "?v=${v.thumbVersion}_${v.thumbOptions}_${v.thumbNote.hashCode()}")
+                    .apply { api.authHeaders.forEach { (k, value) -> addHeader(k, value) } }
+                    .crossfade(true).build()
+                Box(Modifier.weight(1f)) {
+                    AsyncImage(
+                        model = req, contentDescription = "Option $n", contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFF2A2E38))
+                            .border(if (chosen) 3.dp else 0.dp, if (chosen) MaterialTheme.colorScheme.primary else Color.Transparent, RoundedCornerShape(8.dp))
+                            .clickable(enabled = !busy && !chosen) { onPick(n) }
+                    )
+                    Text(
+                        "$n", color = Color.White, style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(6.dp).background(Color(0x99000000), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+            if (pair.size == 1) Spacer(Modifier.weight(1f))
+        }
     }
 }

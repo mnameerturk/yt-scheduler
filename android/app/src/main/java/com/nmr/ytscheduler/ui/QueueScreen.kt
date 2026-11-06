@@ -157,7 +157,7 @@ fun Thumb(api: Api, v: Video, width: Int, height: Int, version: Long = 0L) {
     val mod = Modifier.size(width.dp, height.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFF2A2E38))
     if (v.hasThumbnail) {
         val req = ImageRequest.Builder(ctx)
-            .data(api.thumbnailUrl(v.id) + "?v=$version")
+            .data(api.thumbnailUrl(v.id) + "?v=${if (version > 0) version else v.thumbVersion}")
             .apply { api.authHeaders.forEach { (k, value) -> addHeader(k, value) } }
             .crossfade(true)
             .build()
@@ -187,6 +187,9 @@ private fun VideoCard(v: Video, api: Api, onClick: () -> Unit) {
                 Text(time, style = MaterialTheme.typography.bodySmall)
                 Spacer(Modifier.height(4.dp))
                 StatusChip(v.status)
+                thumbBadge(v)?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                }
                 if (!v.error.isNullOrBlank() && v.status != "posted") {
                     Text(
                         v.error.orEmpty(), style = MaterialTheme.typography.bodySmall,
@@ -196,4 +199,12 @@ private fun VideoCard(v: Video, api: Api, onClick: () -> Unit) {
             }
         }
     }
+}
+
+fun thumbBadge(v: Video): String? = when (v.thumbState) {
+    "prompting", "queued" -> "Thumbnails: waiting for Flow"
+    "generating" -> "Thumbnails: Flow is making them"
+    "ready" -> "Pick a thumbnail" + (v.thumbDeadline?.let { " (Claude picks at $it)" } ?: "")
+    "failed" -> "Thumbnails failed"
+    else -> null
 }

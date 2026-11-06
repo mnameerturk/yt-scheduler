@@ -14,7 +14,7 @@ from fastapi import Body, Depends, FastAPI, File, HTTPException, Request, Upload
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from PIL import Image, ImageOps
 
-from . import db, google, scheduler
+from . import db, google, scheduler, thumbs
 from .config import APP_PASSWORD, BASE_URL, DATA_DIR, DRIVE_MODE, TEST_MODE, TIMEZONE
 from .web import DASHBOARD, LOGIN
 
@@ -48,6 +48,7 @@ def _start():
     if not APP_PASSWORD:
         logging.warning("APP_PASSWORD is empty: anyone with the address can use this server")
     scheduler.start()
+    thumbs.start()
 
 
 # ---------- pages ----------
@@ -202,6 +203,10 @@ def _video_out(v):
         "youtube_url": v["youtube_id"] and f"https://youtu.be/{v['youtube_id']}",
         "has_thumbnail": bool(v["thumb_path"] and Path(v["thumb_path"]).exists()),
         "error": v["error"], "attempts": v["attempts"], "created_at": v["created_at"],
+        "thumb_state": v.get("thumb_state"), "thumb_note": v.get("thumb_note"), "thumb_pick": v.get("thumb_pick"),
+        "thumb_by": v.get("thumb_by"), "thumb_options": len(json.loads(v.get("thumb_options") or "[]")),
+        "thumb_deadline_local": _local(dl.isoformat()) if (dl := thumbs.deadline(v)) else None,
+        "thumb_version": int(Path(v["thumb_path"]).stat().st_mtime) if v["thumb_path"] and Path(v["thumb_path"]).exists() else 0,
     }
 
 
@@ -321,6 +326,8 @@ def add_video(data: dict = Body(...)):
                 data.get("file_name"), data.get("file_size"), db.now_iso()))
     fields["status"] = "scheduled" if fields.get("publish_at") else "draft"
     db.update("videos", vid, **fields)
+    if data.get("auto_thumbnail"):
+        thumbs.start_job(vid)
     scheduler.wake()
     return _video_out(_get_video(vid))
 
@@ -358,6 +365,8 @@ def delete_video(vid: int, keep_drive: bool = False):
                 raise HTTPException(502, f"could not delete from Drive: {e}")
     if v["thumb_path"]:
         Path(v["thumb_path"]).unlink(missing_ok=True)
+    import shutil
+    shutil.rmtree(thumbs.OPT_DIR / str(vid), ignore_errors=True)
     db.x("DELETE FROM videos WHERE id=?", (vid,))
     return {"ok": True}
 
@@ -395,7 +404,16 @@ async def set_thumbnail(vid: int, file: UploadFile = File(...)):
         if buf.tell() < 2 * 1024 * 1024:
             break
     path.write_bytes(buf.getvalue())
-    db.update("videos", vid, thumb_path=str(path))
+    v = _get_video(vid)
+    extra = {}
+    if v.get("thumb_state") in ("prompting", "queued", "ready"):
+        extra = {"thumb_state": None, "thumb_note": "your own thumbnail is used"}
+    db.update("videos", vid, thumb_path=str(path), **extra)
+    if v["status"] == "posted" and v["youtube_id"]:
+        from .transfer import set_youtube_thumbnail
+        err = set_youtube_thumbnail(v, v["youtube_id"], path)
+        if err:
+            raise HTTPException(502, f"saved, but YouTube refused it: {err}")
     return _video_out(_get_video(vid))
 
 
@@ -405,3 +423,72 @@ def get_thumbnail(vid: int):
     if not v["thumb_path"] or not Path(v["thumb_path"]).exists():
         raise HTTPException(404, "no thumbnail")
     return FileResponse(v["thumb_path"], media_type="image/jpeg")
+
+
+# ---------- Flow thumbnails ----------
+
+@app.post("/api/videos/{vid}/auto-thumbnail", dependencies=[api])
+def auto_thumbnail(vid: int):
+    """Make (or remake) Flow thumbnail options. Works for posted videos too."""
+    v = _get_video(vid)
+    if v.get("thumb_state") == "generating":
+        raise HTTPException(409, "Flow is making this one right now")
+    thumbs.start_job(vid)
+    return _video_out(_get_video(vid))
+
+
+@app.get("/api/videos/{vid}/thumb-options/{n}", dependencies=[api])
+def thumb_option(vid: int, n: int):
+    opts = json.loads(_get_video(vid).get("thumb_options") or "[]")
+    if not 1 <= n <= len(opts) or not Path(opts[n - 1]).exists():
+        raise HTTPException(404, "no such option")
+    return FileResponse(opts[n - 1], media_type="image/jpeg")
+
+
+@app.post("/api/videos/{vid}/thumb-pick", dependencies=[api])
+def thumb_pick(vid: int, data: dict = Body(...)):
+    _get_video(vid)
+    try:
+        thumbs.apply_pick(vid, int(data.get("option", 0)), by="you")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _video_out(_get_video(vid))
+
+
+@app.get("/api/thumb-style/{acc_id}", dependencies=[api])
+def get_thumb_style(acc_id: int):
+    return {"style": thumbs.style_for(acc_id)}
+
+
+@app.put("/api/thumb-style/{acc_id}", dependencies=[api])
+def put_thumb_style(acc_id: int, data: dict = Body(...)):
+    db.kv_set(f"thumb_style:{acc_id}", str(data.get("style", ""))[:1500])
+    return {"ok": True}
+
+
+@app.get("/api/events", dependencies=[api])
+def events(after: int = 0):
+    """Things the phone should notify about (thumbnails ready, Claude picked, Flow needs you)."""
+    return [e for e in db.kv_get("events", []) if e["seq"] > after]
+
+
+@app.get("/api/flow/alert", dependencies=[api])
+def flow_alert():
+    return db.kv_get("flow_alert", None) or {}
+
+
+# The Flow extension runs in Chrome on this same server.
+@app.get("/api/flow/next", dependencies=[api])
+def flow_next():
+    return thumbs.next_flow_job() or {}
+
+
+@app.post("/api/flow/done", dependencies=[api])
+def flow_done(data: dict = Body(...)):
+    return thumbs.flow_done(str(data.get("job", "")))
+
+
+@app.post("/api/flow/status", dependencies=[api])
+def flow_status(data: dict = Body(...)):
+    thumbs.flow_status(str(data.get("job") or ""), str(data.get("status", "")), str(data.get("message") or ""))
+    return {"ok": True}

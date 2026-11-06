@@ -24,7 +24,7 @@ import com.nmr.ytscheduler.data.Api
 import com.nmr.ytscheduler.data.Prefs
 import java.util.concurrent.TimeUnit
 
-/** Every ~15 minutes: asks the server what posted or failed, and notifies about anything new. */
+/** Every ~15 minutes: asks the server what posted, failed or needs a thumbnail pick, and notifies about anything new. */
 class StatusWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
         val prefs = Prefs(applicationContext)
@@ -43,6 +43,20 @@ class StatusWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         }
         prefs.seen = now
         prefs.seeded = true
+
+        // thumbnails ready / Claude picked / Flow needs you
+        runCatching {
+            val events = Api(applicationContext).events(maxOf(prefs.lastEvent, 0))
+            if (prefs.lastEvent >= 0) events.forEach { e ->
+                val title = when (e.kind) {
+                    "ready" -> "Pick a thumbnail"
+                    "picked" -> "Thumbnail picked"
+                    else -> "Flow needs you"
+                }
+                postNote(applicationContext, 100000 + e.seq, title, e.text)
+            }
+            prefs.lastEvent = maxOf(prefs.lastEvent, events.maxOfOrNull { it.seq } ?: 0)
+        }
         return Result.success()
     }
 

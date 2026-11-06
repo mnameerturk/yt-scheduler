@@ -121,17 +121,27 @@ def upload_to_youtube(v):
     raise IOError("upload finished but YouTube did not confirm it")
 
 
+def set_youtube_thumbnail(v, video_id, path):
+    """Returns None on success, else the error text."""
+    p = Path(path)
+    ctype = "image/png" if p.suffix.lower() == ".png" else "image/jpeg"
+    try:
+        call(v["channel_account_id"], "POST", YT_UPLOAD + "/thumbnails/set",
+             params={"videoId": video_id, "uploadType": "media"},
+             headers={"Content-Type": ctype}, data=p.read_bytes())
+        return None
+    except GoogleError as e:
+        return str(e)[:300]
+
+
 def after_upload(v, video_id):
     notes = []
-    if v["thumb_path"] and Path(v["thumb_path"]).exists():
-        p = Path(v["thumb_path"])
-        ctype = "image/png" if p.suffix.lower() == ".png" else "image/jpeg"
-        try:
-            call(v["channel_account_id"], "POST", YT_UPLOAD + "/thumbnails/set",
-                 params={"videoId": video_id, "uploadType": "media"},
-                 headers={"Content-Type": ctype}, data=p.read_bytes())
-        except GoogleError as e:
-            notes.append(f"thumbnail not set: {e}")
+    # re-read: a thumbnail may have been picked while the video was uploading
+    fresh = db.q("SELECT thumb_path FROM videos WHERE id=?", (v["id"],), one=True) or v
+    if fresh["thumb_path"] and Path(fresh["thumb_path"]).exists():
+        err = set_youtube_thumbnail(v, video_id, fresh["thumb_path"])
+        if err:
+            notes.append(f"thumbnail not set: {err}")
     if v["playlist_id"]:
         try:
             call(v["channel_account_id"], "POST", YT + "/playlistItems", params={"part": "snippet"},
