@@ -34,7 +34,19 @@ class Server:
         self.h = {"Authorization": "Bearer " + conf["password"], "ngrok-skip-browser-warning": "1"}
 
     def req(self, method, path, **kw):
-        r = requests.request(method, self.base + path, headers=self.h, timeout=120, **kw)
+        for attempt in range(5):
+            try:
+                if "files" in kw:  # rewind file uploads before a retry
+                    for f in kw["files"].values():
+                        f.seek(0)
+                r = requests.request(method, self.base + path, headers=self.h, timeout=120, **kw)
+                break
+            except requests.RequestException as e:
+                if attempt == 4:
+                    sys.exit(f"Can't reach the server ({e.__class__.__name__}). "
+                             "Check that run_windows.bat and the ngrok window are running, then try again.")
+                print("Connection hiccup, retrying...")
+                time.sleep(3 * (attempt + 1))
         if r.status_code == 401:
             sys.exit("Server says the app password is wrong. Run --setup again.")
         if not r.ok:

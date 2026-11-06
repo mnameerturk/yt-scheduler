@@ -22,6 +22,12 @@ echo.
 set /p CH=Type part of the channel name and press Enter: 
 echo.
 .venv\Scripts\python.exe send_to_queue.py test-video.mp4 --channel "%CH%" --title "Demo upload" --description "Test upload from NMR Scheduler" --tags "test,demo" --thumbnail test-thumbnail.jpg
+if errorlevel 1 (
+  echo.
+  echo Something went wrong - see the message above.
+  pause
+  exit /b 1
+)
 echo.
-echo Done. Open the YT Scheduler app to see the video in the queue.
+echo Done. Open the NMR Scheduler app to see the video in the queue.
 pause
