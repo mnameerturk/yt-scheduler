@@ -201,8 +201,14 @@ fun EditorScreen(videoId: Int, onBack: () -> Unit) {
                     Text(if (v.hasThumbnail) "Own thumbnail" else "Add own thumbnail")
                 }
                 val making = v.thumbState in listOf("prompting", "queued", "generating")
-                OutlinedButton(onClick = { act { fill(api.autoThumbnail(videoId)) } }, enabled = !busy && !making) {
-                    Text(if (v.thumbState == null) "Make 6 with Flow" else "Remake with Flow")
+                if (v.thumbOptions > 0) {
+                    OutlinedButton(onClick = { act { fill(api.moreThumbnails(videoId)); toast(ctx, "Making 3 more…") } }, enabled = !busy && !making) {
+                        Text("+ 3 more with Flow")
+                    }
+                } else {
+                    OutlinedButton(onClick = { act { fill(api.autoThumbnail(videoId)) } }, enabled = !busy && !making) {
+                        Text(if (v.thumbState == null) "Make 6 with Flow" else "Remake with Flow")
+                    }
                 }
             }
             FlowThumbs(api, v, busy) { n ->
@@ -219,7 +225,7 @@ fun EditorScreen(videoId: Int, onBack: () -> Unit) {
                 Button(onClick = { openUrl(ctx, url) }) { Text("Open on YouTube") }
             }
 
-            TitleOptions(v, editable && !busy) { t ->
+            TitleOptions(v, editable && !busy, onMore = { act { fill(api.moreTitles(videoId)); toast(ctx, "Writing 3 more titles…") } }) { t ->
                 act { fill(api.update(videoId, JSONObject().put("title", t))); toast(ctx, "Title set") }
             }
             OutlinedTextField(
@@ -329,10 +335,11 @@ private fun SwitchRow(label: String, checked: Boolean, enabled: Boolean, onChang
 @Composable
 private fun FlowThumbs(api: Api, v: Video, busy: Boolean, onPick: (Int) -> Unit) {
     val ctx = LocalContext.current
+    val adding = v.thumbOptions > 0
     val note = when (v.thumbState) {
-        "prompting" -> "Claude is writing 6 thumbnail prompts…"
+        "prompting" -> if (adding) "Claude is writing 3 more thumbnail prompts…" else "Claude is writing 6 thumbnail prompts…"
         "queued" -> "Waiting for Flow on the server…"
-        "generating" -> "Flow is making the thumbnails (about 5–10 min)…"
+        "generating" -> if (adding) "Flow is making 3 more (a few minutes)…" else "Flow is making the thumbnails (about 5–10 min)…"
         "ready" -> "Tap the one you want." + (v.thumbDeadline?.let { " If you don't, Claude picks at $it." } ?: "")
         "picked" -> if (v.thumbBy == "Claude") "Claude picked option ${v.thumbPick}. Tap another to switch." else "Option ${v.thumbPick} in use. Tap another to switch."
         "failed" -> "Flow thumbnails failed. Tap Remake with Flow."
@@ -342,11 +349,12 @@ private fun FlowThumbs(api: Api, v: Video, busy: Boolean, onPick: (Int) -> Unit)
     v.thumbNote?.takeIf { v.thumbState in listOf("failed", "generating", "picked") }?.let {
         Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
-    if (v.thumbOptions <= 0 || v.thumbState !in listOf("ready", "picked")) return
+    if (v.thumbOptions <= 0) return
+    val canPick = v.thumbState != "generating"
     (1..v.thumbOptions).chunked(2).forEach { pair ->
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             pair.forEach { n ->
-                val chosen = v.thumbPick == n && v.thumbState == "picked"
+                val chosen = v.thumbPick == n
                 val req = ImageRequest.Builder(ctx)
                     .data(api.thumbOptionUrl(v.id, n) + "?v=${v.thumbVersion}_${v.thumbOptions}_${v.thumbNote.hashCode()}")
                     .apply { api.authHeaders.forEach { (k, value) -> addHeader(k, value) } }
@@ -357,7 +365,7 @@ private fun FlowThumbs(api: Api, v: Video, busy: Boolean, onPick: (Int) -> Unit)
                         modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(8.dp))
                             .background(Color(0xFF2A2E38))
                             .border(if (chosen) 3.dp else 0.dp, if (chosen) MaterialTheme.colorScheme.primary else Color.Transparent, RoundedCornerShape(8.dp))
-                            .clickable(enabled = !busy && !chosen) { onPick(n) }
+                            .clickable(enabled = !busy && !chosen && canPick) { onPick(n) }
                     )
                     Text(
                         "$n", color = Color.White, style = MaterialTheme.typography.labelSmall,
@@ -372,10 +380,11 @@ private fun FlowThumbs(api: Api, v: Video, busy: Boolean, onPick: (Int) -> Unit)
 
 /** Claude's 3 title options (from the script). Tap one to use it. */
 @Composable
-private fun TitleOptions(v: Video, enabled: Boolean, onPick: (String) -> Unit) {
+private fun TitleOptions(v: Video, enabled: Boolean, onMore: () -> Unit, onPick: (String) -> Unit) {
     val note = when (v.metaState) {
         "summarizing" -> "Haiku is reading the script…"
         "writing" -> "Opus is writing titles, description and thumbnail prompts…"
+        "more" -> "Opus is writing 3 more titles…"
         "failed" -> v.metaNote ?: "Claude could not write the title"
         else -> null
     }
@@ -388,5 +397,8 @@ private fun TitleOptions(v: Video, enabled: Boolean, onPick: (String) -> Unit) {
             Text((if (current) "✓ " else "${i + 1}. ") + t, maxLines = 2, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.fillMaxWidth())
         }
+    }
+    TextButton(onClick = onMore, enabled = enabled && v.metaState !in listOf("summarizing", "writing", "more")) {
+        Text("+ 3 more titles")
     }
 }

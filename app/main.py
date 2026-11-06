@@ -509,3 +509,21 @@ def add_script(vid: int, data: dict = Body(...)):
         raise HTTPException(400, "script required")
     thumbs.start_meta(vid, data["script"])
     return _video_out(_get_video(vid))
+
+
+@app.post("/api/videos/{vid}/more-titles", dependencies=[api])
+def more_titles(vid: int):
+    v = _get_video(vid)
+    if v.get("meta_state") in ("summarizing", "writing", "more"):
+        raise HTTPException(409, "Claude is already writing titles for this video")
+    thumbs.start_more_titles(vid)
+    return _video_out(_get_video(vid))
+
+
+@app.post("/api/videos/{vid}/more-thumbnails", dependencies=[api])
+def more_thumbnails(vid: int):
+    v = _get_video(vid)
+    if v.get("thumb_state") in ("prompting", "queued", "generating"):
+        raise HTTPException(409, "thumbnails are already being made for this video")
+    thumbs.start_more_thumbs(vid)
+    return _video_out(_get_video(vid))

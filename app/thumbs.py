@@ -31,6 +31,7 @@ from .config import DATA_DIR
 log = logging.getLogger("thumbs")
 
 OPTIONS = int(os.getenv("THUMB_OPTIONS", "6"))
+MORE = int(os.getenv("MORE_COUNT", "3"))   # extra titles / thumbnails per "more" tap
 PICK_BEFORE = timedelta(hours=float(os.getenv("THUMB_PICK_HOURS", "2")))
 FLOW_DIR = Path(os.getenv("FLOW_DOWNLOADS", str(Path.home() / "Downloads" / "FlowStorybooks")))
 OPT_DIR = DATA_DIR / "thumbopts"
@@ -47,7 +48,7 @@ _wake = threading.Event()
 COLS = {"thumb_state": "TEXT", "thumb_prompts": "TEXT", "thumb_options": "TEXT", "thumb_pick": "INTEGER",
         "thumb_by": "TEXT", "thumb_note": "TEXT", "thumb_job": "TEXT", "thumb_job_at": "TEXT",
         "thumb_deadline": "TEXT", "meta_state": "TEXT", "meta_titles": "TEXT", "meta_note": "TEXT",
-        "script_path": "TEXT"}
+        "script_path": "TEXT", "thumb_append": "INTEGER"}
 
 
 def migrate():
@@ -178,7 +179,12 @@ Description: {desc}
 Answer with ONLY a JSON array of {n} strings."""
 
 
-def write_prompts(v):
+def _summary(v):
+    f = OPT_DIR / str(v["id"]) / "summary.txt"
+    return f.read_text(encoding="utf-8") if f.exists() else ""
+
+
+def write_prompts(v, n=OPTIONS, avoid=()):
     ch = db.q("SELECT channel_title FROM accounts WHERE id=?", (v["channel_account_id"],), one=True) or {}
     style = style_for(v["channel_account_id"])
     work = OPT_DIR / str(v["id"])
@@ -186,12 +192,19 @@ def write_prompts(v):
     refs = copy_refs(v["channel_account_id"], work)
     ref_text = (f"FIRST open and study every one of these best-performing thumbnails from this channel with the Read tool: "
                 f"{', '.join(refs)}. Ignore the small duration timestamp in their corner.") if refs else ""
-    text = PROMPT_RULES.format(n=OPTIONS, title=v.get("title") or v.get("file_name") or "",
-                               channel=ch.get("channel_title") or "", desc=(v.get("description") or "")[:1500],
+    desc = (v.get("description") or "")[:1500]
+    summ = _summary(v)
+    if summ:
+        desc += "\n\nBriefing on the full script:\n" + summ[:8000]
+    text = PROMPT_RULES.format(n=n, title=v.get("title") or v.get("file_name") or "",
+                               channel=ch.get("channel_title") or "", desc=desc,
                                refs=ref_text, style=f"Channel thumbnail style guide:\n{style}" if style else "")
+    if avoid:
+        text += ("\n\nThese concepts were already made; write COMPLETELY DIFFERENT ones (new subject, hook text "
+                 "and composition):\n- " + "\n- ".join(a[:300] for a in avoid))
     prompts = _json_in(ask_claude(text, work, model=WRITER_MODEL, effort=WRITER_EFFORT), "[")
-    prompts = [re.sub(r"\s+", " ", str(p)).strip() for p in prompts if str(p).strip()][:OPTIONS]
-    if len(prompts) < 2:
+    prompts = [re.sub(r"\s+", " ", str(p)).strip() for p in prompts if str(p).strip()][:n]
+    if len(prompts) < min(2, n):
         raise ValueError("Claude returned too few prompts")
     return prompts
 
@@ -299,7 +312,47 @@ def write_meta(v):
     return titles, desc, thumbs_
 
 
+MORE_TITLES_PROMPT = """You write YouTube titles for the channel "{channel}" for the highest click-through rate.
+Write {n} NEW title options for the video below. Max 70 characters each. Match the channel's proven title style.
+Curiosity gap, specific, no clickbait the video doesn't pay off. They must be clearly different from these
+existing options: {existing}
+
+Channel style guide:
+{style}
+
+Current title: {title}
+Description: {desc}
+{summary}
+Answer with ONLY a JSON array of {n} strings."""
+
+
+def more_titles(v):
+    ch = db.q("SELECT channel_title FROM accounts WHERE id=?", (v["channel_account_id"],), one=True) or {}
+    work = OPT_DIR / str(v["id"])
+    work.mkdir(exist_ok=True)
+    existing = json.loads(v["meta_titles"] or "[]")
+    if v.get("title") and v["title"] not in existing:
+        existing.append(v["title"])
+    summ = _summary(v)
+    text = MORE_TITLES_PROMPT.format(channel=ch.get("channel_title") or "", n=MORE, existing=json.dumps(existing),
+                                     style=style_for(v["channel_account_id"]) or "(none yet)", title=v.get("title") or "",
+                                     desc=(v.get("description") or "")[:1500],
+                                     summary=("Briefing on the full script:\n" + summ[:8000]) if summ else "")
+    new = [str(t).strip()[:100] for t in _json_in(ask_claude(text, work, model=WRITER_MODEL, effort=WRITER_EFFORT), "[")]
+    return existing + [t for t in new if t and t not in existing][:MORE]
+
+
 def _meta_tick():
+    for v in db.q("SELECT * FROM videos WHERE meta_state='more' ORDER BY id"):
+        try:
+            titles = more_titles(v)
+            db.update("videos", v["id"], meta_state="ready", meta_titles=json.dumps(titles),
+                      meta_note=f"{len(titles)} title options")
+            _event("meta", v["id"], f"More titles ready: {v.get('title') or v['file_name']}")
+        except Exception as e:  # noqa: BLE001
+            log.warning("more titles failed for %s: %s", v["id"], e)
+            db.update("videos", v["id"], meta_state="ready" if v["meta_titles"] else "failed",
+                      meta_note=f"Claude could not write more titles: {str(e)[:200]}")
     for v in db.q("SELECT * FROM videos WHERE meta_state IN ('summarizing','writing') ORDER BY id"):
         try:
             titles, desc, prompts = write_meta(v)
@@ -328,6 +381,20 @@ def _meta_tick():
 
 # ---------- jobs ----------
 
+def start_more_titles(vid):
+    db.update("videos", vid, meta_state="more", meta_note="Opus is writing more titles")
+    wake()
+
+
+def start_more_thumbs(vid):
+    v = db.q("SELECT thumb_options FROM videos WHERE id=?", (vid,), one=True)
+    have = len(json.loads(v["thumb_options"] or "[]"))
+    if not have:
+        return start_job(vid)
+    db.update("videos", vid, thumb_state="prompting", thumb_append=have, thumb_note=f"writing {MORE} more prompts")
+    wake()
+
+
 def start_job(vid):
     """(Re)make thumbnail options for a video. For a posted video, Claude picks after 12 h if nmr doesn't."""
     v = db.q("SELECT status FROM videos WHERE id=?", (vid,), one=True)
@@ -335,12 +402,13 @@ def start_job(vid):
     if v and v["status"] == "posted":
         dl = (datetime.now(timezone.utc) + timedelta(hours=12)).replace(microsecond=0).isoformat()
     db.update("videos", vid, thumb_state="prompting", thumb_prompts=None, thumb_options=None, thumb_pick=None,
-              thumb_by=None, thumb_note="writing prompts", thumb_job=None, thumb_job_at=None, thumb_deadline=dl)
+              thumb_by=None, thumb_note="writing prompts", thumb_job=None, thumb_job_at=None, thumb_deadline=dl,
+              thumb_append=None)
     wake()
 
 
 def book_text(v, job):
-    prompts = json.loads(v["thumb_prompts"])
+    prompts = json.loads(v["thumb_prompts"])[v.get("thumb_append") or 0:]
     lines = [f"BOOK: {job}", "MODEL: keep", "ASPECT: 16:9", "IMAGES: 1", "WAIT: 15-40",
              "BREAK EVERY: 8-10", "BREAK LENGTH: 60-120", "RETRIES: 3", ""]
     for k, p in enumerate(prompts, 1):
@@ -384,17 +452,23 @@ def flow_done(job):
         db.update("videos", v["id"], thumb_state="failed", thumb_note=f"no images found in {src}")
         return {"ok": False, "error": "no images found"}
     out = OPT_DIR / str(v["id"])
-    shutil.rmtree(out, ignore_errors=True)
-    out.mkdir(parents=True)
-    opts = []
-    for k, f in enumerate(files, 1):
+    more = v.get("thumb_append") is not None
+    opts = json.loads(v["thumb_options"] or "[]") if more else []
+    if not more:
+        for old in out.glob("option*.jpg"):
+            old.unlink(missing_ok=True)
+    out.mkdir(parents=True, exist_ok=True)
+    first = len(opts) + 1
+    for k, f in enumerate(files, first):
         dst = out / f"option{k}.jpg"
         _save_jpeg(f, dst)
         opts.append(str(dst))
     shutil.rmtree(src, ignore_errors=True)  # keep the server disk small
     dl = deadline(v)
-    note = f"{len(opts)} options ready" + (f"; Claude picks at {dl.isoformat()} if you don't" if dl else "")
-    db.update("videos", v["id"], thumb_state="ready", thumb_options=json.dumps(opts), thumb_note=note)
+    note = f"{len(opts)} options ready" + (f"; Claude picks at {dl.isoformat()} if you don't" if dl and not v["thumb_pick"] else "")
+    # with "more", an earlier pick stays in use until you tap a new one
+    state = "picked" if (more and v["thumb_pick"]) else "ready"
+    db.update("videos", v["id"], thumb_state=state, thumb_options=json.dumps(opts), thumb_note=note, thumb_append=None)
     _event("ready", v["id"], f"Thumbnails ready: {v.get('title') or v['file_name']}")
     wake()
     return {"ok": True, "options": len(opts)}
@@ -429,7 +503,9 @@ def apply_pick(vid, n, by="you", why=""):
     path = DATA_DIR / "thumbs" / f"{vid}.jpg"
     shutil.copyfile(opts[n - 1], path)
     note = f"option {n} picked by {by}" + (f": {why}" if why else "")
-    db.update("videos", vid, thumb_path=str(path), thumb_pick=n, thumb_by=by, thumb_state="picked", thumb_note=note)
+    busy = v["thumb_state"] in ("prompting", "queued", "generating")   # "more" still running: keep that going
+    db.update("videos", vid, thumb_path=str(path), thumb_pick=n, thumb_by=by,
+              thumb_state=v["thumb_state"] if busy else "picked", thumb_note=v["thumb_note"] if busy else note)
     if v["status"] == "posted" and v["youtube_id"]:
         err = set_youtube_thumbnail(v, v["youtube_id"], path)
         db.update("videos", vid, thumb_note=note + ("; set on YouTube" if not err else f"; YouTube said: {err}"))
@@ -444,12 +520,19 @@ def _tick():
     # thumbnails for videos without a script (with a script, the meta step writes the prompts)
     for v in db.q("SELECT * FROM videos WHERE thumb_state='prompting' AND (meta_state IS NULL OR meta_state "
                   "IN ('failed','ready')) ORDER BY id"):
+        more = v.get("thumb_append") is not None
+        old = json.loads(v["thumb_prompts"] or "[]") if more else []
         try:
-            prompts, note = write_prompts(v), "prompts written by Claude"
+            prompts = write_prompts(v, n=MORE, avoid=old) if more else write_prompts(v)
+            note = f"{MORE} more prompts written by Claude" if more else "prompts written by Claude"
         except Exception as e:  # noqa: BLE001
             log.warning("Claude could not write prompts for %s: %s", v["id"], e)
-            prompts, note = fallback_prompts(v), f"basic prompts used (Claude: {str(e)[:150]})"
-        db.update("videos", v["id"], thumb_prompts=json.dumps(prompts), thumb_state="queued", thumb_note=note)
+            prompts = fallback_prompts(v)
+            prompts, note = (prompts[:MORE] if more else prompts), f"basic prompts used (Claude: {str(e)[:150]})"
+        if more:
+            # the new prompts go after the ones already made; the Flow job only runs the new ones
+            db.update("videos", v["id"], thumb_append=len(old))
+        db.update("videos", v["id"], thumb_prompts=json.dumps(old + prompts), thumb_state="queued", thumb_note=note)
 
     now = datetime.now(timezone.utc)
     for v in db.q("SELECT * FROM videos WHERE thumb_state='ready'"):
