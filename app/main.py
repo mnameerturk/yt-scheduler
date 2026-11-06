@@ -457,7 +457,7 @@ def thumb_pick(vid: int, data: dict = Body(...)):
 
 @app.get("/api/thumb-style/{acc_id}", dependencies=[api])
 def get_thumb_style(acc_id: int):
-    return {"style": thumbs.style_for(acc_id)}
+    return {"style": thumbs.app_style(acc_id)}
 
 
 @app.put("/api/thumb-style/{acc_id}", dependencies=[api])

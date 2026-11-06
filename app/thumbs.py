@@ -34,6 +34,7 @@ OPTIONS = int(os.getenv("THUMB_OPTIONS", "6"))
 PICK_BEFORE = timedelta(hours=float(os.getenv("THUMB_PICK_HOURS", "2")))
 FLOW_DIR = Path(os.getenv("FLOW_DOWNLOADS", str(Path.home() / "Downloads" / "FlowStorybooks")))
 OPT_DIR = DATA_DIR / "thumbopts"
+REFS_DIR = DATA_DIR / "refs"   # refs/<channel_slug>/  ref*.jpg + style.txt (best-performing examples)
 OPT_DIR.mkdir(parents=True, exist_ok=True)
 STALE = timedelta(hours=3)
 _wake = threading.Event()
@@ -100,17 +101,64 @@ def _json_in(text, opener):
     return json.loads(text[i:j + 1])
 
 
+def _slug(t):
+    return re.sub(r"[^a-z0-9]+", "_", (t or "").lower()).strip("_")
+
+
+def refs_dir(account_id):
+    """The channel's reference folder (matched by channel name), or None."""
+    ch = db.q("SELECT channel_title FROM accounts WHERE id=?", (account_id,), one=True) or {}
+    want = _slug(ch.get("channel_title"))
+    if not want or not REFS_DIR.exists():
+        return None
+    for d in REFS_DIR.iterdir():
+        if d.is_dir() and (d.name == want or d.name in want or want in d.name):
+            return d
+    return None
+
+
+def copy_refs(account_id, work):
+    """Put the channel's reference thumbnails next to the work files (Claude reads them there)."""
+    out = []
+    d = refs_dir(account_id)
+    if d:
+        for k, f in enumerate(sorted(d.glob("*.jp*g")) + sorted(d.glob("*.png")), 1):
+            dst = Path(work) / f"reference{k}{f.suffix.lower()}"
+            shutil.copyfile(f, dst)
+            out.append(dst.name)
+    return out
+
+
 def style_for(account_id):
+    """Style written in the app (if any) + the channel's style.txt from its reference folder."""
+    parts = []
+    d = refs_dir(account_id)
+    if d and (d / "style.txt").exists():
+        parts.append((d / "style.txt").read_text(encoding="utf-8").strip())
+    note = db.kv_get(f"thumb_style:{account_id}", "") or ""
+    if note.strip():
+        parts.append("Extra notes from the creator: " + note.strip())
+    return "\n".join(parts)
+
+
+def app_style(account_id):
     return db.kv_get(f"thumb_style:{account_id}", "") or ""
 
 
-PROMPT_RULES = """You write image prompts for YouTube thumbnails. They are generated in Google Flow (Nano Banana) at 16:9.
-Write {n} DIFFERENT thumbnail concepts for the video below, aimed at the highest click-through rate:
-- one clear focal subject, big and close, readable on a small phone screen; strong contrast; a curiosity gap
-- vary the concepts (different subjects, angles, emotions, compositions) so the creator gets real choice
-- describe only visuals; no caption sentences, signs, labels, boards, price tags or UI
-- if text truly helps, at most 1-3 huge bold words, spelled exactly, in quotes, and nothing else written anywhere
-- each prompt 40-90 words, ends with: wide 16:9 composition
+PROMPT_RULES = """You write image prompts for YouTube thumbnails. Each prompt is generated in Google Flow (Nano Banana) at 16:9
+and the image is used AS IS: it must be the complete, finished thumbnail. Nothing gets edited afterwards.
+{refs}
+Write {n} DIFFERENT thumbnail prompts for the video below, aimed at the highest click-through rate:
+- copy the channel's proven style closely (layout, text treatment, colours, arrows, background, lighting), but with
+  new subjects and hooks that fit THIS video
+- include EVERYTHING in the prompt: the exact overlay text in double quotes (2-4 words, spelled exactly), its font look,
+  colours (which word is red), outline/shadow, banner, size and position; every arrow (colour, style, where it points);
+  any cut-out objects; the background. Say "no other text anywhere in the image"
+- one clear focal subject, big and readable on a small phone screen; strong contrast; a curiosity gap that teases the title
+  without repeating it
+- vary the {n} concepts (different hero subject, hook text, angle or composition) so the creator gets real choice
+- never include a video duration timestamp, channel logo, watermark or YouTube UI
+- each prompt 70-140 words, ending with: wide 16:9 YouTube thumbnail
 {style}
 Video title: {title}
 Channel: {channel}
@@ -122,11 +170,14 @@ Answer with ONLY a JSON array of {n} strings."""
 def write_prompts(v):
     ch = db.q("SELECT channel_title FROM accounts WHERE id=?", (v["channel_account_id"],), one=True) or {}
     style = style_for(v["channel_account_id"])
-    text = PROMPT_RULES.format(n=OPTIONS, title=v.get("title") or v.get("file_name") or "",
-                               channel=ch.get("channel_title") or "", desc=(v.get("description") or "")[:1500],
-                               style=f"- the channel's thumbnail style (follow it): {style}" if style else "")
     work = OPT_DIR / str(v["id"])
     work.mkdir(exist_ok=True)
+    refs = copy_refs(v["channel_account_id"], work)
+    ref_text = (f"FIRST open and study every one of these best-performing thumbnails from this channel with the Read tool: "
+                f"{', '.join(refs)}. Ignore the small duration timestamp in their corner.") if refs else ""
+    text = PROMPT_RULES.format(n=OPTIONS, title=v.get("title") or v.get("file_name") or "",
+                               channel=ch.get("channel_title") or "", desc=(v.get("description") or "")[:1500],
+                               refs=ref_text, style=f"Channel thumbnail style guide:\n{style}" if style else "")
     prompts = _json_in(ask_claude(text, work), "[")
     prompts = [re.sub(r"\s+", " ", str(p)).strip() for p in prompts if str(p).strip()][:OPTIONS]
     if len(prompts) < 2:
@@ -149,11 +200,15 @@ def fallback_prompts(v):
 def claude_pick(v, opts):
     work = OPT_DIR / str(v["id"])
     names = [Path(o).name for o in opts]
+    refs = copy_refs(v["channel_account_id"], work)
+    ref_text = (f"For comparison, {', '.join(refs)} are this channel's best-performing thumbnails; prefer the option "
+                "that matches their style. ") if refs else ""
     text = (f"These files in the current folder are {len(names)} thumbnail options for a YouTube video titled "
             f"\"{v.get('title') or ''}\": {', '.join(names)}.\n"
-            "Open and look at every one with the Read tool. Pick the one most likely to get the highest "
-            "click-through rate on a phone: clear single subject, strong contrast, emotion/curiosity, no "
-            "garbled text or broken anatomy, fits the title.\n"
+            "Open and look at every one with the Read tool. " + ref_text +
+            "Pick the one most likely to get the highest click-through rate on a phone: clear single subject, "
+            "strong contrast, emotion/curiosity, overlay text spelled correctly and readable (reject any option "
+            "with misspelled, garbled or extra text, or broken anatomy), fits the title.\n"
             f"Answer with ONLY JSON: {{\"pick\": <1-{len(names)}>, \"why\": \"<one short sentence>\"}}")
     ans = _json_in(ask_claude(text, work), "{")
     n = int(ans["pick"])
