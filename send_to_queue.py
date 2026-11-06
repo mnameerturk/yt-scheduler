@@ -140,10 +140,15 @@ def upload_to_drive(srv, channel, path):
                 raise IOError(f"Drive answered {r.status_code}")
             except (IOError, requests.RequestException) as e:
                 failures += 1
-                if failures > 8:
+                if failures > 40:   # ~35 min without internet
                     sys.exit(f"\nUpload keeps failing ({e}). Run the same command again later to continue.")
+                print(f"\nConnection problem ({e.__class__.__name__}), waiting and continuing...")
                 time.sleep(min(60, 2 ** failures))
-                res = status(url)
+                try:
+                    res = status(url)
+                except requests.RequestException:
+                    continue   # still offline: wait again, then ask Drive where it stopped
+                failures = min(failures, 5)
                 if isinstance(res, dict):
                     state_file.unlink(missing_ok=True)
                     return res["id"], tok["drive_account_id"]
