@@ -165,7 +165,13 @@ Write {n} DIFFERENT thumbnail prompts for the video below, aimed at the highest 
   animal/object/person/place of this story (e.g. a video about a grizzly shows that grizzly in every option). The
   reference thumbnails are only for STYLE; never take their subjects (their tiger, elephant, lion, sword…) unless
   this video is about that same thing. Any second element (object, person, prey, place) must come from this story.
-- copy the channel's proven style closely (layout, text treatment, colours, arrows, background, lighting)
+- REFERENCES ARE INSPIRATION, NOT A TEMPLATE: take the channel's visual language from them (photoreal quality,
+  bold high-contrast colours, the red/white condensed text treatment, arrows, mood), but design NEW thumbnail ideas.
+  The layout notes in the style guide describe what worked once; they are not rules. At most 1-2 options may use the
+  familiar reference layout; the others must use clearly different compositions and ideas, e.g. extreme close-up of
+  the subject's eyes/teeth/claws, a person for scale facing the subject, before/after split, the aftermath scene,
+  a point-of-view shot, a map or evidence object from the story, a dramatic full scene. Pick whatever gets the highest
+  click-through: one instantly readable focal point, emotion, tension, a question the viewer needs answered.
 - include EVERYTHING in the prompt: the exact overlay text in double quotes (2-4 words, spelled exactly), its font look,
   colours (which word is red), outline/shadow, banner, size and position; every arrow (colour, style, where it points);
   any cut-out objects; the background. Say "no other text anywhere in the image"
@@ -269,8 +275,15 @@ Write:
    Each image is used AS IS as the finished thumbnail, nothing is edited afterwards, so include EVERYTHING: the exact
    overlay text in double quotes (2-4 words, spelled exactly, it must not just repeat the title), font look, colours
    (which word is red), outline/shadow, banner, size and position; every arrow (colour, style, where it points); any
-   cut-out objects; the background; and say "no other text anywhere in the image". Copy the channel's proven
-   thumbnail style closely.
+   cut-out objects; the background; and say "no other text anywhere in the image". Keep the channel's proven
+   thumbnail look, but:
+   REFERENCES ARE INSPIRATION, NOT A TEMPLATE: take the channel's visual language from them (photoreal quality,
+   bold high-contrast colours, the red/white condensed text treatment, arrows, mood), but design NEW thumbnail ideas.
+   The layout notes in the style guide describe what worked once; they are not rules. At most 1-2 options may use the
+   familiar reference layout; the others must use clearly different compositions and ideas, e.g. extreme close-up of
+   the subject's eyes/teeth/claws, a person for scale facing the subject, before/after split, the aftermath scene,
+   a point-of-view shot, a map or evidence object from the story, a dramatic full scene. Pick whatever gets the highest
+   click-through: one instantly readable focal point, emotion, tension, a question the viewer needs answered.
    THE SUBJECT RULE (most important): every thumbnail must show what THIS video is actually about: the exact
    animal/object/person/place of this story (e.g. a video about a grizzly shows that grizzly in every option). The
    reference thumbnails are only for STYLE; never take their subjects (their tiger, elephant, lion, sword…) unless
