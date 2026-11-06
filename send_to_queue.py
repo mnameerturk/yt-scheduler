@@ -153,6 +153,26 @@ def upload_to_drive(srv, channel, path):
                 offset = res
 
 
+def find_script(video, given=None):
+    """The narration script: --script file, else AutoDoc's project.json next to the video."""
+    cands = [Path(given)] if given else [video.parent / "project.json", video.parent / "script.txt"]
+    for c in cands:
+        if not c.exists():
+            continue
+        if c.suffix.lower() == ".json":
+            try:
+                txt = json.loads(c.read_text(encoding="utf-8")).get("script", "")
+            except Exception:
+                txt = ""
+        else:
+            txt = c.read_text(encoding="utf-8", errors="replace")
+        if txt.strip():
+            return txt
+    if given:
+        sys.exit(f"No script text found in {given}")
+    return ""
+
+
 def main():
     p = argparse.ArgumentParser(description="Send a video to the NMR YouTube scheduler")
     p.add_argument("video", nargs="?")
@@ -166,6 +186,8 @@ def main():
     p.add_argument("--time", help="'YYYY-MM-DD HH:MM' in the server's timezone; leave out to decide later")
     p.add_argument("--thumbnail", help="your own thumbnail; without it, Flow makes 6 options on the server")
     p.add_argument("--no-auto-thumb", action="store_true", help="don't make Flow thumbnail options")
+    p.add_argument("--script", help="script .txt or AutoDoc project.json (found next to the video automatically)")
+    p.add_argument("--no-auto-meta", action="store_true", help="don't let Claude write title + description")
     p.add_argument("--playlist", help="playlist ID")
     p.add_argument("--category", default="27", help="YouTube category ID (27 = Education)")
     p.add_argument("--kids", action="store_true", help="made for kids")
@@ -197,16 +219,20 @@ def main():
     desc = Path(a.description_file).read_text(encoding="utf-8") if a.description_file else a.description
     print(f"Channel: {channel['channel_title']}  |  {path.name}  ({path.stat().st_size / 1024 / 1024:.0f} MB)")
     file_id, drive_acc = upload_to_drive(srv, channel, path)
+    script = "" if a.no_auto_meta else find_script(path, a.script)
     v = srv.req("POST", "/api/videos", json={
         "channel_account_id": channel["id"], "drive_account_id": drive_acc, "drive_file_id": file_id,
         "file_name": path.name, "file_size": path.stat().st_size, "title": a.title or path.stem,
         "description": desc, "tags": a.tags, "publish_at": a.time, "playlist_id": a.playlist,
         "category_id": a.category, "made_for_kids": a.kids, "synthetic_media": a.ai,
-        "auto_thumbnail": not a.thumbnail and not a.no_auto_thumb})
+        "auto_thumbnail": not a.thumbnail and not a.no_auto_thumb, "script": script})
     if a.thumbnail:
         with open(a.thumbnail, "rb") as f:
             v = srv.req("POST", f"/api/videos/{v['id']}/thumbnail", files={"file": f})
     print(f"Queued #{v['id']}: {v['title']}  ->  {v['publish_at_local'] or 'no time yet (set it in the app)'}")
+    if script:
+        print(f"Script sent ({len(script.split())} words): Haiku summarizes it, Opus writes 3 titles + description"
+              + (" + the thumbnail prompts." if not a.thumbnail and not a.no_auto_thumb else "."))
     if not a.thumbnail and not a.no_auto_thumb:
         print("Thumbnails: Claude writes 6 prompts, Flow makes them, you pick in the app (or Claude picks 2 h before posting).")
     print("This video no longer needs the PC.")

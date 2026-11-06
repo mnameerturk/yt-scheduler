@@ -206,6 +206,8 @@ def _video_out(v):
         "thumb_state": v.get("thumb_state"), "thumb_note": v.get("thumb_note"), "thumb_pick": v.get("thumb_pick"),
         "thumb_by": v.get("thumb_by"), "thumb_options": len(json.loads(v.get("thumb_options") or "[]")),
         "thumb_deadline_local": _local(dl.isoformat()) if (dl := thumbs.deadline(v)) else None,
+        "meta_state": v.get("meta_state"), "meta_note": v.get("meta_note"),
+        "title_options": json.loads(v.get("meta_titles") or "[]"),
         "thumb_version": int(Path(v["thumb_path"]).stat().st_mtime) if v["thumb_path"] and Path(v["thumb_path"]).exists() else 0,
     }
 
@@ -328,6 +330,8 @@ def add_video(data: dict = Body(...)):
     db.update("videos", vid, **fields)
     if data.get("auto_thumbnail"):
         thumbs.start_job(vid)
+    if (data.get("script") or "").strip():
+        thumbs.start_meta(vid, data["script"])
     scheduler.wake()
     return _video_out(_get_video(vid))
 
@@ -367,6 +371,7 @@ def delete_video(vid: int, keep_drive: bool = False):
         Path(v["thumb_path"]).unlink(missing_ok=True)
     import shutil
     shutil.rmtree(thumbs.OPT_DIR / str(vid), ignore_errors=True)
+    (thumbs.SCRIPT_DIR / f"{vid}.txt").unlink(missing_ok=True)
     db.x("DELETE FROM videos WHERE id=?", (vid,))
     return {"ok": True}
 
@@ -457,12 +462,14 @@ def thumb_pick(vid: int, data: dict = Body(...)):
 
 @app.get("/api/thumb-style/{acc_id}", dependencies=[api])
 def get_thumb_style(acc_id: int):
-    return {"style": thumbs.app_style(acc_id)}
+    return {"style": thumbs.app_style(acc_id), "footer": thumbs.desc_footer(acc_id)}
 
 
 @app.put("/api/thumb-style/{acc_id}", dependencies=[api])
 def put_thumb_style(acc_id: int, data: dict = Body(...)):
     db.kv_set(f"thumb_style:{acc_id}", str(data.get("style", ""))[:1500])
+    if "footer" in data:
+        db.kv_set(f"desc_footer:{acc_id}", str(data.get("footer") or "")[:3000])
     return {"ok": True}
 
 
@@ -492,3 +499,13 @@ def flow_done(data: dict = Body(...)):
 def flow_status(data: dict = Body(...)):
     thumbs.flow_status(str(data.get("job") or ""), str(data.get("status", "")), str(data.get("message") or ""))
     return {"ok": True}
+
+
+@app.post("/api/videos/{vid}/script", dependencies=[api])
+def add_script(vid: int, data: dict = Body(...)):
+    """(Re)write title options + description (+ thumbnail prompts if a Flow job is waiting) from a script."""
+    _get_video(vid)
+    if not (data.get("script") or "").strip():
+        raise HTTPException(400, "script required")
+    thumbs.start_meta(vid, data["script"])
+    return _video_out(_get_video(vid))

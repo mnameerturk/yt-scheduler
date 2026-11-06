@@ -59,6 +59,7 @@ fun SettingsScreen(firstRun: Boolean, onDone: () -> Unit) {
     var channels by remember { mutableStateOf<List<Channel>>(emptyList()) }
     var styleFor by remember { mutableStateOf<Channel?>(null) }
     var styleText by remember { mutableStateOf("") }
+    var footerText by remember { mutableStateOf("") }
     var reload by remember { mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(false) }
 
@@ -82,7 +83,7 @@ fun SettingsScreen(firstRun: Boolean, onDone: () -> Unit) {
     styleFor?.let { c ->
         AlertDialog(
             onDismissRequest = { styleFor = null },
-            title = { Text("Thumbnail style · ${c.title ?: ""}") },
+            title = { Text("Style · ${c.title ?: ""}") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
@@ -91,13 +92,15 @@ fun SettingsScreen(firstRun: Boolean, onDone: () -> Unit) {
                         style = MaterialTheme.typography.bodySmall
                     )
                     OutlinedTextField(value = styleText, onValueChange = { styleText = it.take(1500) },
-                        minLines = 4, modifier = Modifier.fillMaxWidth())
+                        label = { Text("Thumbnail notes") }, minLines = 3, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(value = footerText, onValueChange = { footerText = it.take(3000) },
+                        label = { Text("Added to every description") }, minLines = 3, modifier = Modifier.fillMaxWidth())
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
                     val id = c.id
-                    act { api.setThumbStyle(id, styleText.trim()); toast(ctx, "Style saved") }
+                    act { api.setThumbStyle(id, styleText.trim(), footerText.trim()); toast(ctx, "Saved") }
                     styleFor = null
                 }) { Text("Save") }
             },
@@ -159,7 +162,7 @@ fun SettingsScreen(firstRun: Boolean, onDone: () -> Unit) {
                 }, onRemove = {
                     act { api.removeAccount(c.id); reload++ }
                 }, onStyle = {
-                    act { styleText = api.thumbStyle(c.id); styleFor = c }
+                    act { val (st, ft) = api.thumbStyle(c.id); styleText = st; footerText = ft; styleFor = c }
                 }) }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(enabled = !busy, onClick = { act { openUrl(ctx, api.connectLink("youtube")) } }) {
@@ -194,7 +197,7 @@ private fun AccountCard(c: Channel, busy: Boolean, onStorage: () -> Unit, onRemo
             Text(badges.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (c.hasDrive && !c.isStorage) TextButton(enabled = !busy, onClick = onStorage) { Text("Use this Drive") }
-                if (c.channelId != null) TextButton(enabled = !busy, onClick = onStyle) { Text("Thumbnail style") }
+                if (c.channelId != null) TextButton(enabled = !busy, onClick = onStyle) { Text("Style & description") }
                 TextButton(enabled = !busy, onClick = onRemove) { Text("Remove") }
             }
         }

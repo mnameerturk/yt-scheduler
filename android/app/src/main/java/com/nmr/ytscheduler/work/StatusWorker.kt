@@ -51,6 +51,7 @@ class StatusWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                 val title = when (e.kind) {
                     "ready" -> "Pick a thumbnail"
                     "picked" -> "Thumbnail picked"
+                    "meta" -> "Title & description ready"
                     else -> "Flow needs you"
                 }
                 postNote(applicationContext, 100000 + e.seq, title, e.text)

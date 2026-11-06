@@ -36,12 +36,18 @@ FLOW_DIR = Path(os.getenv("FLOW_DOWNLOADS", str(Path.home() / "Downloads" / "Flo
 OPT_DIR = DATA_DIR / "thumbopts"
 REFS_DIR = DATA_DIR / "refs"   # refs/<channel_slug>/  ref*.jpg + style.txt (best-performing examples)
 OPT_DIR.mkdir(parents=True, exist_ok=True)
+SCRIPT_DIR = DATA_DIR / "scripts"
+SCRIPT_DIR.mkdir(parents=True, exist_ok=True)
+SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "haiku")
+WRITER_MODEL = os.getenv("WRITER_MODEL", "opus")
+WRITER_EFFORT = os.getenv("WRITER_EFFORT", "medium")
 STALE = timedelta(hours=3)
 _wake = threading.Event()
 
 COLS = {"thumb_state": "TEXT", "thumb_prompts": "TEXT", "thumb_options": "TEXT", "thumb_pick": "INTEGER",
         "thumb_by": "TEXT", "thumb_note": "TEXT", "thumb_job": "TEXT", "thumb_job_at": "TEXT",
-        "thumb_deadline": "TEXT"}
+        "thumb_deadline": "TEXT", "meta_state": "TEXT", "meta_titles": "TEXT", "meta_note": "TEXT",
+        "script_path": "TEXT"}
 
 
 def migrate():
@@ -79,12 +85,17 @@ def claude_bin():
     return None
 
 
-def ask_claude(prompt, cwd, timeout=600):
+def ask_claude(prompt, cwd, timeout=900, model=None, effort=None, stdin=None):
     exe = claude_bin()
     if not exe:
         raise RuntimeError("Claude Code is not installed on the server")
-    r = subprocess.run([exe, "-p", prompt, "--output-format", "json", "--allowedTools", "Read"],
-                       cwd=str(cwd), capture_output=True, text=True, timeout=timeout)
+    cmd = [exe, "-p", prompt, "--output-format", "json", "--allowedTools", "Read"]
+    if model:
+        cmd += ["--model", model]
+    if effort:
+        cmd += ["--effort", effort]
+    r = subprocess.run(cmd, cwd=str(cwd), input=stdin if stdin is not None else "", capture_output=True,
+                       text=True, timeout=timeout)
     if r.returncode != 0:
         raise RuntimeError(f"Claude failed: {(r.stderr or r.stdout)[-300:]}")
     out = json.loads(r.stdout)
@@ -178,7 +189,7 @@ def write_prompts(v):
     text = PROMPT_RULES.format(n=OPTIONS, title=v.get("title") or v.get("file_name") or "",
                                channel=ch.get("channel_title") or "", desc=(v.get("description") or "")[:1500],
                                refs=ref_text, style=f"Channel thumbnail style guide:\n{style}" if style else "")
-    prompts = _json_in(ask_claude(text, work), "[")
+    prompts = _json_in(ask_claude(text, work, model=WRITER_MODEL, effort=WRITER_EFFORT), "[")
     prompts = [re.sub(r"\s+", " ", str(p)).strip() for p in prompts if str(p).strip()][:OPTIONS]
     if len(prompts) < 2:
         raise ValueError("Claude returned too few prompts")
@@ -210,11 +221,109 @@ def claude_pick(v, opts):
             "strong contrast, emotion/curiosity, overlay text spelled correctly and readable (reject any option "
             "with misspelled, garbled or extra text, or broken anatomy), fits the title.\n"
             f"Answer with ONLY JSON: {{\"pick\": <1-{len(names)}>, \"why\": \"<one short sentence>\"}}")
-    ans = _json_in(ask_claude(text, work), "{")
+    ans = _json_in(ask_claude(text, work, model=WRITER_MODEL, effort=WRITER_EFFORT), "{")
     n = int(ans["pick"])
     if not 1 <= n <= len(names):
         raise ValueError(f"pick {n} out of range")
     return n, str(ans.get("why", ""))[:200]
+
+
+# ---------- titles + description from the script ----------
+
+SUMMARY_PROMPT = """The full narration script of a long YouTube documentary is piped in. Write a dense briefing for the
+person who will write its title, description and thumbnail. Plain text, 500-900 words:
+1. The topic in one line.
+2. Every part/item the video covers, in order, each with its single most surprising fact.
+3. The 5 most shocking or curiosity-provoking moments (what would make someone click).
+4. Key names, places, dates and numbers.
+Do not invent anything that is not in the script."""
+
+META_PROMPT = """You package YouTube videos for the channel "{channel}" for the highest click-through rate.
+{refs}
+Below is a briefing on the video's script (written from the full script).
+
+Write:
+1. "titles": 3 title options, best first. Max 70 characters each. Match the channel's proven title style shown in
+   the style guide. Curiosity gap, specific, no clickbait that the video doesn't pay off.
+2. "description": 120-250 words. First two lines hook the viewer and naturally contain the main search keywords.
+   Then a short overview of what the video covers (no timestamps), then 3 relevant hashtags on the last line.
+   Plain text, no markdown, no links.
+3. "thumbnails": {n} thumbnail image prompts for Google Flow (Nano Banana, 16:9) made to pair with title option 1.
+   Each image is used AS IS as the finished thumbnail, nothing is edited afterwards, so include EVERYTHING: the exact
+   overlay text in double quotes (2-4 words, spelled exactly, it must not just repeat the title), font look, colours
+   (which word is red), outline/shadow, banner, size and position; every arrow (colour, style, where it points); any
+   cut-out objects; the background; and say "no other text anywhere in the image". Copy the channel's proven
+   thumbnail style closely with new subjects. Vary the {n} concepts. One clear focal subject readable on a phone.
+   Never a duration timestamp, logo, watermark or YouTube UI. 70-140 words each, ending with: wide 16:9 YouTube thumbnail
+
+Channel style guide:
+{style}
+
+Briefing:
+{summary}
+
+Answer with ONLY JSON: {{"titles": [...], "description": "...", "thumbnails": [...]}}"""
+
+
+def start_meta(vid, script):
+    path = SCRIPT_DIR / f"{vid}.txt"
+    path.write_text(script, encoding="utf-8")
+    db.update("videos", vid, script_path=str(path), meta_state="summarizing", meta_titles=None,
+              meta_note="Haiku is reading the script")
+    wake()
+
+
+def desc_footer(account_id):
+    return (db.kv_get(f"desc_footer:{account_id}", "") or "").strip()
+
+
+def write_meta(v):
+    ch = db.q("SELECT channel_title FROM accounts WHERE id=?", (v["channel_account_id"],), one=True) or {}
+    work = OPT_DIR / str(v["id"])
+    work.mkdir(exist_ok=True)
+    script = Path(v["script_path"]).read_text(encoding="utf-8")
+    summary = ask_claude(SUMMARY_PROMPT, work, model=SUMMARY_MODEL, stdin=script, timeout=1200).strip()
+    (work / "summary.txt").write_text(summary, encoding="utf-8")
+    db.update("videos", v["id"], meta_state="writing", meta_note="Opus is writing titles, description and thumbnails")
+    refs = copy_refs(v["channel_account_id"], work)
+    ref_text = (f"FIRST open and study every one of these best-performing thumbnails from this channel with the Read "
+                f"tool: {', '.join(refs)}. Ignore the small duration timestamp in their corner.") if refs else ""
+    text = META_PROMPT.format(channel=ch.get("channel_title") or "", refs=ref_text, n=OPTIONS,
+                              style=style_for(v["channel_account_id"]) or "(none yet)", summary=summary[:12000])
+    out = _json_in(ask_claude(text, work, model=WRITER_MODEL, effort=WRITER_EFFORT), "{")
+    titles = [str(t).strip()[:100] for t in out.get("titles", []) if str(t).strip()][:3]
+    thumbs_ = [re.sub(r"\s+", " ", str(p)).strip() for p in out.get("thumbnails", []) if str(p).strip()][:OPTIONS]
+    desc = str(out.get("description", "")).strip()
+    if not titles or not desc:
+        raise ValueError("Opus returned no titles/description")
+    return titles, desc, thumbs_
+
+
+def _meta_tick():
+    for v in db.q("SELECT * FROM videos WHERE meta_state IN ('summarizing','writing') ORDER BY id"):
+        try:
+            titles, desc, prompts = write_meta(v)
+        except Exception as e:  # noqa: BLE001
+            log.warning("title/description failed for %s: %s", v["id"], e)
+            db.update("videos", v["id"], meta_state="failed", meta_note=f"Claude could not write them: {str(e)[:200]}")
+            continue
+        fields = {"meta_state": "ready", "meta_titles": json.dumps(titles),
+                  "meta_note": "title option 1 is set; tap another to switch"}
+        fresh = db.q("SELECT * FROM videos WHERE id=?", (v["id"],), one=True)
+        if fresh["status"] not in ("posting", "posted"):
+            placeholder = (fresh["title"] or "").strip() in ("", Path(fresh["file_name"] or "").stem)
+            if placeholder:   # never overwrite a title you typed yourself
+                fields["title"] = titles[0]
+            else:
+                fields["meta_note"] = "your title is kept; tap an option to use it instead"
+            if not (fresh["description"] or "").strip():
+                footer = desc_footer(v["channel_account_id"])
+                fields["description"] = desc + ("\n\n" + footer if footer else "")
+        if fresh.get("thumb_state") == "prompting" and len(prompts) >= 2:
+            fields.update(thumb_prompts=json.dumps(prompts), thumb_state="queued",
+                          thumb_note="prompts written by Opus from the script")
+        db.update("videos", v["id"], **fields)
+        _event("meta", v["id"], f"Title ready: {titles[0]}")
 
 
 # ---------- jobs ----------
@@ -331,7 +440,10 @@ def apply_pick(vid, n, by="you", why=""):
 # ---------- worker ----------
 
 def _tick():
-    for v in db.q("SELECT * FROM videos WHERE thumb_state='prompting' ORDER BY id"):
+    _meta_tick()
+    # thumbnails for videos without a script (with a script, the meta step writes the prompts)
+    for v in db.q("SELECT * FROM videos WHERE thumb_state='prompting' AND (meta_state IS NULL OR meta_state "
+                  "IN ('failed','ready')) ORDER BY id"):
         try:
             prompts, note = write_prompts(v), "prompts written by Claude"
         except Exception as e:  # noqa: BLE001

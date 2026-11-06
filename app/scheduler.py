@@ -55,6 +55,7 @@ def cleanup():
         import shutil
         from .thumbs import OPT_DIR
         shutil.rmtree(OPT_DIR / str(v["id"]), ignore_errors=True)
+        (OPT_DIR.parent / "scripts" / f"{v['id']}.txt").unlink(missing_ok=True)
         db.x("DELETE FROM videos WHERE id=?", (v["id"],))
 
 

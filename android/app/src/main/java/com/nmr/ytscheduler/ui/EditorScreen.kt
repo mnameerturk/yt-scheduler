@@ -219,6 +219,9 @@ fun EditorScreen(videoId: Int, onBack: () -> Unit) {
                 Button(onClick = { openUrl(ctx, url) }) { Text("Open on YouTube") }
             }
 
+            TitleOptions(v, editable && !busy) { t ->
+                act { fill(api.update(videoId, JSONObject().put("title", t))); toast(ctx, "Title set") }
+            }
             OutlinedTextField(
                 value = title, onValueChange = { if (it.length <= 100) title = it }, enabled = editable,
                 label = { Text("Title (${title.length}/100)") }, modifier = Modifier.fillMaxWidth()
@@ -363,6 +366,27 @@ private fun FlowThumbs(api: Api, v: Video, busy: Boolean, onPick: (Int) -> Unit)
                 }
             }
             if (pair.size == 1) Spacer(Modifier.weight(1f))
+        }
+    }
+}
+
+/** Claude's 3 title options (from the script). Tap one to use it. */
+@Composable
+private fun TitleOptions(v: Video, enabled: Boolean, onPick: (String) -> Unit) {
+    val note = when (v.metaState) {
+        "summarizing" -> "Haiku is reading the script…"
+        "writing" -> "Opus is writing titles, description and thumbnail prompts…"
+        "failed" -> v.metaNote ?: "Claude could not write the title"
+        else -> null
+    }
+    note?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+    if (v.titleOptions.isEmpty()) return
+    Text("Title options", style = MaterialTheme.typography.labelLarge)
+    v.titleOptions.forEachIndexed { i, t ->
+        val current = t == v.title
+        OutlinedButton(onClick = { onPick(t) }, enabled = enabled && !current, modifier = Modifier.fillMaxWidth()) {
+            Text((if (current) "✓ " else "${i + 1}. ") + t, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth())
         }
     }
 }

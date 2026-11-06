@@ -51,6 +51,7 @@ data class Video(
     val thumbState: String? = null, val thumbNote: String? = null, val thumbOptions: Int = 0,
     val thumbPick: Int? = null, val thumbBy: String? = null, val thumbDeadline: String? = null,
     val thumbVersion: Long = 0,
+    val metaState: String? = null, val metaNote: String? = null, val titleOptions: List<String> = emptyList(),
 ) {
     val displayTitle get() = title?.takeIf { it.isNotBlank() } ?: fileName ?: "Untitled"
 }
@@ -141,6 +142,8 @@ class Api(ctx: Context) {
             thumbState = o.str("thumb_state"), thumbNote = o.str("thumb_note"), thumbOptions = o.optInt("thumb_options"),
             thumbPick = o.int("thumb_pick"), thumbBy = o.str("thumb_by"), thumbDeadline = o.str("thumb_deadline_local"),
             thumbVersion = o.optLong("thumb_version"),
+            metaState = o.str("meta_state"), metaNote = o.str("meta_note"),
+            titleOptions = (o.optJSONArray("title_options") ?: JSONArray()).let { a -> (0 until a.length()).map { a.getString(it) } },
         )
     }
 
@@ -185,10 +188,11 @@ class Api(ctx: Context) {
         }
     }
 
-    suspend fun thumbStyle(accountId: Int): String =
-        JSONObject(request("GET", "/api/thumb-style/$accountId")).optString("style")
-    suspend fun setThumbStyle(accountId: Int, style: String) {
-        request("PUT", "/api/thumb-style/$accountId", JSONObject().put("style", style))
+    /** (style note, description footer) */
+    suspend fun thumbStyle(accountId: Int): Pair<String, String> =
+        JSONObject(request("GET", "/api/thumb-style/$accountId")).let { it.optString("style") to it.optString("footer") }
+    suspend fun setThumbStyle(accountId: Int, style: String, footer: String) {
+        request("PUT", "/api/thumb-style/$accountId", JSONObject().put("style", style).put("footer", footer))
     }
 
     suspend fun connectLink(kind: String): String =
