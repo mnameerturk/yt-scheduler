@@ -77,6 +77,7 @@ fun statusLabel(s: String) = when (s) {
     "posting" -> "Uploading"
     "posted" -> "Posted"
     "failed" -> "Failed"
+    "rendering" -> "Being made in AutoDoc"
     else -> s
 }
 
@@ -87,6 +88,7 @@ fun StatusChip(status: String) {
         "posting" -> Color(0xFF6D4C00)
         "posted" -> Color(0xFF1B5E20)
         "failed" -> Color(0xFF7F1D1D)
+        "rendering" -> Color(0xFF4A2F6B)
         else -> Color(0xFF444444)
     }
     Box(

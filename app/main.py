@@ -330,15 +330,18 @@ def list_videos(status: str = ""):
 
 @app.post("/api/videos", dependencies=[api])
 def add_video(data: dict = Body(...)):
-    for k in ("channel_account_id", "drive_file_id", "drive_account_id"):
+    """rendering=true: the video is still being made in AutoDoc; titles/thumbnails start now and the file is
+    attached later with /attach-file."""
+    rendering = bool(data.get("rendering"))
+    for k in ("channel_account_id",) if rendering else ("channel_account_id", "drive_file_id", "drive_account_id"):
         if not data.get(k):
             raise HTTPException(400, f"{k} required")
     fields = _clean(data)
     vid = db.x("INSERT INTO videos(channel_account_id, drive_account_id, drive_file_id, file_name, file_size, "
                "created_at) VALUES(?,?,?,?,?,?)",
-               (data["channel_account_id"], data["drive_account_id"], data["drive_file_id"],
+               (data["channel_account_id"], data.get("drive_account_id"), data.get("drive_file_id"),
                 data.get("file_name"), data.get("file_size"), db.now_iso()))
-    fields["status"] = "scheduled" if fields.get("publish_at") else "draft"
+    fields["status"] = "rendering" if rendering else ("scheduled" if fields.get("publish_at") else "draft")
     db.update("videos", vid, **fields)
     if data.get("auto_thumbnail"):
         thumbs.start_job(vid)
@@ -373,7 +376,7 @@ def edit_video(vid: int, data: dict = Body(...)):
         db.update("videos", vid, **changed)
         return _video_out(_get_video(vid))
     if "publish_at" in fields:
-        fields["status"] = "scheduled" if fields["publish_at"] else "draft"
+        fields["status"] = "rendering" if v["status"] == "rendering" else ("scheduled" if fields["publish_at"] else "draft")
         fields.update(attempts=0, next_try_at=None, error=None)
     db.update("videos", vid, **fields)
     scheduler.wake()
@@ -385,7 +388,7 @@ def delete_video(vid: int, keep_drive: bool = False):
     v = _get_video(vid)
     if v["status"] == "posting":
         raise HTTPException(409, "posting right now, try again in a few minutes")
-    if not keep_drive and v["status"] != "posted":
+    if not keep_drive and v["status"] != "posted" and v["drive_file_id"]:
         try:
             google.call(v["drive_account_id"], "DELETE", f"{google.DRIVE}/files/{v['drive_file_id']}",
                         params={"supportsAllDrives": "true"})
@@ -406,6 +409,8 @@ def post_now(vid: int):
     v = _get_video(vid)
     if v["status"] in ("posting", "posted"):
         raise HTTPException(409, "already posting or posted")
+    if v["status"] == "rendering":
+        raise HTTPException(409, "the video is still being made in AutoDoc")
     db.update("videos", vid, status="scheduled", publish_at=db.now_iso(), attempts=0, next_try_at=None, error=None)
     scheduler.wake()
     return _video_out(_get_video(vid))
@@ -590,4 +595,19 @@ def more_prompts(vid: int, data: dict = Body(default={})):
         thumbs.start_more_prompts(vid, str(data.get("kind") or "new"), int(data["option"]) if data.get("option") else None)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    return _video_out(_get_video(vid))
+
+
+@app.post("/api/videos/{vid}/attach-file", dependencies=[api])
+def attach_file(vid: int, data: dict = Body(...)):
+    """AutoDoc finished: the rendered file is in Drive now."""
+    v = _get_video(vid)
+    if v["status"] != "rendering":
+        raise HTTPException(409, f"video is {v['status']}, not waiting for its file")
+    for k in ("drive_file_id", "drive_account_id"):
+        if not data.get(k):
+            raise HTTPException(400, f"{k} required")
+    db.update("videos", vid, drive_file_id=data["drive_file_id"], drive_account_id=int(data["drive_account_id"]),
+              file_size=data.get("file_size"), status="scheduled" if v["publish_at"] else "draft")
+    scheduler.wake()
     return _video_out(_get_video(vid))

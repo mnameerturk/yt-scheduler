@@ -31,7 +31,8 @@ from .config import DATA_DIR
 log = logging.getLogger("thumbs")
 
 OPTIONS = int(os.getenv("THUMB_OPTIONS", "6"))
-MORE = int(os.getenv("MORE_COUNT", "3"))   # extra titles / thumbnails per "more" tap
+MORE = int(os.getenv("MORE_COUNT", "3"))
+IMAGES_PER_PROMPT = int(os.getenv("IMAGES_PER_PROMPT", "2"))   # Flow makes this many images per prompt   # extra titles / thumbnails per "more" tap
 PICK_BEFORE = timedelta(hours=float(os.getenv("THUMB_PICK_HOURS", "2")))
 FLOW_DIR = Path(os.getenv("FLOW_DOWNLOADS", str(Path.home() / "Downloads" / "FlowStorybooks")))
 OPT_DIR = DATA_DIR / "thumbopts"
@@ -541,7 +542,7 @@ def start_job(vid):
 def book_text(v, job):
     prompts = json.loads(v["thumb_prompts"])[v.get("thumb_append") or 0:]
     # slow, human-like pacing: Google flags fast/regular generation as "unusual activity"
-    lines = [f"BOOK: {job}", "MODEL: keep", "ASPECT: 16:9", "IMAGES: 1", "WAIT: 45-100",
+    lines = [f"BOOK: {job}", "MODEL: keep", "ASPECT: 16:9", f"IMAGES: {IMAGES_PER_PROMPT}", "WAIT: 45-100",
              "BREAK EVERY: 3-5", "BREAK LENGTH: 180-420", "RETRIES: 2", "MAX PER DAY: 36", ""]
     for k, p in enumerate(prompts, 1):
         lines += [f"PAGE t{k}:", p, ""]

@@ -182,7 +182,7 @@ fun EditorScreen(videoId: Int, onBack: () -> Unit) {
             }
             return@Scaffold
         }
-        val editable = v.status in listOf("draft", "scheduled", "failed")
+        val editable = v.status in listOf("draft", "scheduled", "failed", "rendering")
         val wordsEditable = editable || v.status == "posted"   // title/description/tags update on YouTube
         Column(
             Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -203,7 +203,7 @@ fun EditorScreen(videoId: Int, onBack: () -> Unit) {
                 }
                 val making = v.thumbState in listOf("prompting", "queued", "generating")
                 OutlinedButton(onClick = { act { fill(api.autoThumbnail(videoId)) } }, enabled = !busy && !making) {
-                    Text(if (v.thumbState == null) "Make 6 with Flow" else "Remake 6")
+                    Text(if (v.thumbState == null) "Make with Flow" else "Remake all")
                 }
             }
             if (v.status != "posting") OutlinedButton(
@@ -287,7 +287,7 @@ fun EditorScreen(videoId: Int, onBack: () -> Unit) {
                     if (channelId == null) { toast(ctx, "Choose a channel"); return@Button }
                     act { fill(api.update(videoId, fields())); toast(ctx, "Saved") }
                 }) { Text(if (date != null) "Save schedule" else "Save as draft") }
-                OutlinedButton(enabled = !busy, modifier = Modifier.fillMaxWidth(), onClick = {
+                OutlinedButton(enabled = !busy && v.status != "rendering", modifier = Modifier.fillMaxWidth(), onClick = {
                     act {
                         api.update(videoId, fields().put("publish_at", JSONObject.NULL))
                         fill(api.postNow(videoId))
@@ -380,12 +380,12 @@ private fun FlowThumbs(
     }
     val adding = v.thumbOptions > 0
     val note = when (v.thumbState) {
-        "prompting" -> if (adding) "Claude is writing the new prompts (${v.thumbNote ?: ""})…" else "Claude is writing 6 thumbnail prompts…"
+        "prompting" -> if (adding) "Claude is writing the new prompts (${v.thumbNote ?: ""})…" else "Claude is writing the thumbnail prompts…"
         "queued" -> "Waiting for Flow on the server…"
         "generating" -> if (adding) "Flow is making the new ones (a few minutes); they'll appear at the end…" else "Flow is making the thumbnails (about 5–10 min)…"
         "ready" -> "Tap the one you want." + (v.thumbDeadline?.let { " If you don't, Claude picks at $it." } ?: "")
         "picked" -> if (v.thumbBy == "Claude") "Claude picked option ${v.thumbPick}. Tap another to switch." else "Option ${v.thumbPick} in use. Tap another to switch."
-        "failed" -> "Flow thumbnails failed. Tap Remake 6."
+        "failed" -> "Flow thumbnails failed. Tap Remake all."
         else -> null
     } ?: return
     Text(note, style = MaterialTheme.typography.bodySmall)

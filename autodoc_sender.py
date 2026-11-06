@@ -8,6 +8,10 @@ Claude writes the titles, description and thumbnails on the server.
   python  autodoc_sender.py --list          finished projects and whether they were sent
   python  autodoc_sender.py --send NAME...  send specific (older) projects now, e.g. 08_old_ephraim_utah_1923
 
+Early start: as soon as a new project's voiceover is done (its script is final), the video is added to the
+scheduler as "being made in AutoDoc" with the script, so Claude writes the titles/description and Flow makes
+the thumbnails while AutoDoc renders. When the render finishes, the file is uploaded and attached to it.
+
 Which file is sent: final_captioned.mp4 if you made one, otherwise final.mp4. New renders wait
 WAIT_MINUTES after finishing first, so there's time to add captions. Settings: autodoc_sender.json
 """
@@ -26,6 +30,7 @@ HERE = Path(__file__).resolve().parent
 CONF = HERE / "autodoc_sender.json"
 LOG = HERE / "autodoc_sender.log"
 MARK = ".sent_to_scheduler.json"
+EARLY = ".scheduler_entry.json"   # created before the render finished
 DEFAULTS = {
     "projects_dir": r"D:\New folder (4)\autodoc_projects",
     "channels": {"wildlife": "Lost Archive", "ancient_history": "Known"},  # AutoDoc profile -> part of channel name
@@ -79,7 +84,54 @@ def profile(p):
         return ""
 
 
+def channel_for(srv, p, c):
+    prof = profile(p)
+    want = c["channels"].get(prof)
+    if not want:
+        raise RuntimeError(f"no channel set for AutoDoc profile '{prof}' (add it to autodoc_sender.json)")
+    chans = [ch for ch in srv.req("GET", "/api/channels") if ch["channel_id"]]
+    hits = [ch for ch in chans if want.lower() in (ch["channel_title"] or "").lower()]
+    if len(hits) != 1:
+        raise RuntimeError(f"'{want}' matched {len(hits)} channels")
+    return hits[0]
+
+
+def script_of(p):
+    try:
+        return json.loads((p / "project.json").read_text(encoding="utf-8")).get("script", "") or ""
+    except (OSError, ValueError):
+        return ""
+
+
+def created(p):
+    try:
+        return float(json.loads((p / "project.json").read_text(encoding="utf-8")).get("created") or 0)
+    except (OSError, ValueError):
+        return 0.0
+
+
+def register_early(srv, p, c):
+    """Voiceover done -> add to the scheduler now (no file yet) so titles + thumbnails are ready early."""
+    channel = channel_for(srv, p, c)
+    script = script_of(p)
+    v = srv.req("POST", "/api/videos", json={
+        "channel_account_id": channel["id"], "rendering": True, "file_name": f"{p.name}.mp4", "title": p.name,
+        "description": "", "tags": "", "auto_thumbnail": True, "script": script})
+    (p / EARLY).write_text(json.dumps({"video_id": v["id"], "channel": channel["channel_title"],
+                                       "at": datetime.now().isoformat(timespec="seconds")}), encoding="utf-8")
+    log(f"{p.name}: voiceover done -> added as #{v['id']} (being made). Claude + Flow start on titles/thumbnails now.")
+
+
 def send(srv, p, c):
+    early = json.loads((p / EARLY).read_text(encoding="utf-8")) if (p / EARLY).exists() else None
+    if early:
+        try:
+            if srv.req("GET", f"/api/videos/{early['video_id']}").get("status") != "rendering":
+                early = None   # already has a file somehow -> send as a new video
+        except RuntimeError as e:
+            if "404" not in str(e):
+                raise
+            early = None   # deleted in the app meanwhile -> send as a new video
     prof = profile(p)
     want = c["channels"].get(prof)
     if not want:
@@ -95,6 +147,13 @@ def send(srv, p, c):
         file_id, drive_acc = stq.upload_to_drive(srv, channel, vf)
     except SystemExit as e:  # the uploader exits on hard failures; here we just retry later
         raise RuntimeError(f"Drive upload stopped: {e}") from None
+    if early:
+        v = srv.req("POST", f"/api/videos/{early['video_id']}/attach-file", json={
+            "drive_account_id": drive_acc, "drive_file_id": file_id, "file_size": vf.stat().st_size})
+        (p / MARK).write_text(json.dumps({"video_id": v["id"], "file": vf.name, "channel": channel["channel_title"],
+                                          "at": datetime.now().isoformat(timespec="seconds")}), encoding="utf-8")
+        log(f"{p.name}: file attached to #{v['id']}; it's ready to post.")
+        return v
     script = stq.find_script(vf)
     v = srv.req("POST", "/api/videos", json={
         "channel_account_id": channel["id"], "drive_account_id": drive_acc, "drive_file_id": file_id,
@@ -112,6 +171,12 @@ def scan(srv, c):
     for p in sorted(root.iterdir()):
         if not p.is_dir() or (p / MARK).exists():
             continue
+        if (not (p / EARLY).exists() and (p / ".voice_done").exists() and created(p) >= c["since"]
+                and script_of(p).strip() and not finished(p)):
+            try:
+                register_early(srv, p, c)
+            except (Exception, SystemExit) as e:  # noqa: BLE001
+                log(f"{p.name}: not added early ({e}); will retry")
         done = finished(p)
         if not done or done < c["since"]:
             continue
