@@ -198,16 +198,15 @@ fun EditorScreen(videoId: Int, onBack: () -> Unit) {
             }
             if (v.status != "posting") Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { pickThumb.launch("image/*") }, enabled = !busy) {
-                    Text(if (v.hasThumbnail) "Own thumbnail" else "Add own thumbnail")
+                    Text("Own image")
                 }
                 val making = v.thumbState in listOf("prompting", "queued", "generating")
+                OutlinedButton(onClick = { act { fill(api.autoThumbnail(videoId)) } }, enabled = !busy && !making) {
+                    Text(if (v.thumbState == null) "Make 6 with Flow" else "Remake 6")
+                }
                 if (v.thumbOptions > 0) {
                     OutlinedButton(onClick = { act { fill(api.moreThumbnails(videoId)); toast(ctx, "Making 3 more…") } }, enabled = !busy && !making) {
-                        Text("+ 3 more with Flow")
-                    }
-                } else {
-                    OutlinedButton(onClick = { act { fill(api.autoThumbnail(videoId)) } }, enabled = !busy && !making) {
-                        Text(if (v.thumbState == null) "Make 6 with Flow" else "Remake with Flow")
+                        Text("+ 3 more")
                     }
                 }
             }
@@ -342,7 +341,7 @@ private fun FlowThumbs(api: Api, v: Video, busy: Boolean, onPick: (Int) -> Unit)
         "generating" -> if (adding) "Flow is making 3 more (a few minutes)…" else "Flow is making the thumbnails (about 5–10 min)…"
         "ready" -> "Tap the one you want." + (v.thumbDeadline?.let { " If you don't, Claude picks at $it." } ?: "")
         "picked" -> if (v.thumbBy == "Claude") "Claude picked option ${v.thumbPick}. Tap another to switch." else "Option ${v.thumbPick} in use. Tap another to switch."
-        "failed" -> "Flow thumbnails failed. Tap Remake with Flow."
+        "failed" -> "Flow thumbnails failed. Tap Remake 6."
         else -> null
     } ?: return
     Text(note, style = MaterialTheme.typography.bodySmall)
