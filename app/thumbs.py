@@ -48,7 +48,7 @@ _wake = threading.Event()
 COLS = {"thumb_state": "TEXT", "thumb_prompts": "TEXT", "thumb_options": "TEXT", "thumb_pick": "INTEGER",
         "thumb_by": "TEXT", "thumb_note": "TEXT", "thumb_job": "TEXT", "thumb_job_at": "TEXT",
         "thumb_deadline": "TEXT", "meta_state": "TEXT", "meta_titles": "TEXT", "meta_note": "TEXT",
-        "script_path": "TEXT", "thumb_append": "INTEGER"}
+        "script_path": "TEXT", "thumb_append": "INTEGER", "thumb_req": "TEXT", "thumb_opt_prompts": "TEXT"}
 
 
 def migrate():
@@ -409,13 +409,70 @@ def start_more_titles(vid):
     wake()
 
 
-def start_more_thumbs(vid):
+def start_more_thumbs(vid, kind="new", option=None, note=""):
+    """kind: new = 3 new ideas · like = 3 variations of one option · edit = 1 edited copy of one option."""
     v = db.q("SELECT thumb_options FROM videos WHERE id=?", (vid,), one=True)
     have = len(json.loads(v["thumb_options"] or "[]"))
     if not have:
         return start_job(vid)
-    db.update("videos", vid, thumb_state="prompting", thumb_append=have, thumb_note=f"writing {MORE} more prompts")
+    if kind in ("like", "edit") and not (option and 1 <= option <= have):
+        raise ValueError("no such option")
+    if kind == "edit" and not note.strip():
+        raise ValueError("write what to change")
+    label = {"new": f"writing {MORE} new ideas", "like": f"writing {MORE} like option {option}",
+             "edit": f"editing option {option}"}[kind]
+    db.update("videos", vid, thumb_state="prompting", thumb_append=have, thumb_note=label,
+              thumb_req=json.dumps({"kind": kind, "option": option, "note": note.strip()[:500]}))
     wake()
+
+
+def option_prompt(v, n):
+    """The prompt that made option n (best effort for options made before this was tracked)."""
+    op = json.loads(v.get("thumb_opt_prompts") or "[]")
+    if 1 <= n <= len(op) and op[n - 1]:
+        return op[n - 1]
+    pr = json.loads(v.get("thumb_prompts") or "[]")
+    return pr[n - 1] if 1 <= n <= len(pr) else ""
+
+
+VARIANT_RULES = """You write image prompts for finished YouTube thumbnails (Google Flow / Nano Banana, 16:9). The image is used
+AS IS, so every prompt must describe everything: exact overlay text in double quotes (spelled exactly), font look,
+colours (which word is red), outline/shadow, banner, size and position, arrows, objects, background, and say
+"no other text anywhere in the image". End each prompt with: wide 16:9 YouTube thumbnail
+Video title: {title}
+Channel style guide:
+{style}
+
+The creator is looking at {img} (open it with the Read tool). It was made from this prompt:
+{prompt}
+"""
+
+LIKE_TASK = """The creator likes this one. Write {n} variations of it: keep the same concept, subject, layout and look, but
+give each a DIFFERENT hook text (2-4 words, teasing a real moment from this story) and some changes to the image
+(pose/expression, camera angle, lighting, a different secondary element from the story). Same subject as the original.
+Answer with ONLY a JSON array of {n} strings."""
+
+EDIT_TASK = """The creator wants this change: "{note}"
+Rewrite the prompt applying exactly that change (make it clearly visible) and keep everything else the same.
+If the image doesn't match its prompt in some way that conflicts with the request, describe what the creator wants.
+Answer with ONLY a JSON array with 1 string."""
+
+
+def write_variants(v, req):
+    n = int(req["option"])
+    work = OPT_DIR / str(v["id"])
+    img = f"option{n}.jpg"
+    base = VARIANT_RULES.format(title=v.get("title") or "", style=style_for(v["channel_account_id"]) or "(none)",
+                                img=img, prompt=option_prompt(v, n) or "(prompt unknown: describe what you see)")
+    if req["kind"] == "like":
+        text, count = base + LIKE_TASK.format(n=MORE), MORE
+    else:
+        text, count = base + EDIT_TASK.format(note=req["note"].replace('"', "'")), 1
+    out = _json_in(ask_claude(text, work, model=WRITER_MODEL, effort=WRITER_EFFORT), "[")
+    out = [re.sub(r"\s+", " ", str(p)).strip() for p in out if str(p).strip()][:count]
+    if not out:
+        raise ValueError("Claude returned no prompt")
+    return out
 
 
 def start_job(vid):
@@ -477,6 +534,9 @@ def flow_done(job):
     out = OPT_DIR / str(v["id"])
     more = v.get("thumb_append") is not None
     opts = json.loads(v["thumb_options"] or "[]") if more else []
+    batch = json.loads(v["thumb_prompts"] or "[]")[v.get("thumb_append") or 0:]
+    op = json.loads(v.get("thumb_opt_prompts") or "[]") if more else []
+    op += [""] * (len(opts) - len(op))
     if not more:
         for old in out.glob("option*.jpg"):
             old.unlink(missing_ok=True)
@@ -486,12 +546,15 @@ def flow_done(job):
         dst = out / f"option{k}.jpg"
         _save_jpeg(f, dst)
         opts.append(str(dst))
+        i = int(re.match(r"t(\d+)_", f.name).group(1)) - 1
+        op.append(batch[i] if 0 <= i < len(batch) else "")
     shutil.rmtree(src, ignore_errors=True)  # keep the server disk small
     dl = deadline(v)
     note = f"{len(opts)} options ready" + (f"; Claude picks at {dl.isoformat()} if you don't" if dl and not v["thumb_pick"] else "")
     # with "more", an earlier pick stays in use until you tap a new one
     state = "picked" if (more and v["thumb_pick"]) else "ready"
-    db.update("videos", v["id"], thumb_state=state, thumb_options=json.dumps(opts), thumb_note=note, thumb_append=None)
+    db.update("videos", v["id"], thumb_state=state, thumb_options=json.dumps(opts), thumb_note=note, thumb_append=None,
+              thumb_req=None, thumb_opt_prompts=json.dumps(op))
     _event("ready", v["id"], f"Thumbnails ready: {v.get('title') or v['file_name']}")
     wake()
     return {"ok": True, "options": len(opts)}
@@ -545,11 +608,22 @@ def _tick():
                   "IN ('failed','ready')) ORDER BY id"):
         more = v.get("thumb_append") is not None
         old = json.loads(v["thumb_prompts"] or "[]") if more else []
+        req = json.loads(v.get("thumb_req") or "{}") if more else {}
+        kind = req.get("kind", "new")
         try:
-            prompts = write_prompts(v, n=MORE, avoid=old) if more else write_prompts(v)
-            note = f"{MORE} more prompts written by Claude" if more else "prompts written by Claude"
+            if kind in ("like", "edit"):
+                prompts = write_variants(v, req)
+                note = (f"{len(prompts)} like option {req['option']}" if kind == "like"
+                        else f"edited copy of option {req['option']}: {req['note'][:80]}")
+            else:
+                prompts = write_prompts(v, n=MORE, avoid=old) if more else write_prompts(v)
+                note = f"{MORE} new ideas written by Claude" if more else "prompts written by Claude"
         except Exception as e:  # noqa: BLE001
             log.warning("Claude could not write prompts for %s: %s", v["id"], e)
+            if kind in ("like", "edit"):
+                db.update("videos", v["id"], thumb_state="picked" if v["thumb_pick"] else "ready", thumb_append=None,
+                          thumb_req=None, thumb_note=f"Claude could not do that: {str(e)[:150]}")
+                continue
             prompts = fallback_prompts(v)
             prompts, note = (prompts[:MORE] if more else prompts), f"basic prompts used (Claude: {str(e)[:150]})"
         if more:

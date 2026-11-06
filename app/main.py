@@ -521,9 +521,14 @@ def more_titles(vid: int):
 
 
 @app.post("/api/videos/{vid}/more-thumbnails", dependencies=[api])
-def more_thumbnails(vid: int):
+def more_thumbnails(vid: int, data: dict = Body(default={})):
+    """kind=new (3 new ideas), like + option (3 like that one), edit + option + note (1 edited copy)."""
     v = _get_video(vid)
     if v.get("thumb_state") in ("prompting", "queued", "generating"):
-        raise HTTPException(409, "thumbnails are already being made for this video")
-    thumbs.start_more_thumbs(vid)
+        raise HTTPException(409, "thumbnails are already being made for this video; try again when they're done")
+    try:
+        thumbs.start_more_thumbs(vid, str(data.get("kind") or "new"), int(data["option"]) if data.get("option") else None,
+                                 str(data.get("note") or ""))
+    except (ValueError, KeyError) as e:
+        raise HTTPException(400, str(e))
     return _video_out(_get_video(vid))

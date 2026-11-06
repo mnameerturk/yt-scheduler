@@ -210,7 +210,10 @@ fun EditorScreen(videoId: Int, onBack: () -> Unit) {
                     }
                 }
             }
-            FlowThumbs(api, v, busy) { n ->
+            FlowThumbs(api, v, busy,
+                onLike = { n -> act { fill(api.moreThumbnails(videoId, "like", n)); toast(ctx, "Making 3 like option $n…") } },
+                onEdit = { n, note -> act { fill(api.moreThumbnails(videoId, "edit", n, note)); toast(ctx, "Making an edited copy of option $n…") } },
+            ) { n ->
                 act {
                     fill(api.pickThumbnail(videoId, n))
                     thumbVersion = System.currentTimeMillis()
@@ -332,13 +335,35 @@ private fun SwitchRow(label: String, checked: Boolean, enabled: Boolean, onChang
 
 /** The Flow options: tap one to use it. Shown while picking and after a pick (to switch). */
 @Composable
-private fun FlowThumbs(api: Api, v: Video, busy: Boolean, onPick: (Int) -> Unit) {
+private fun FlowThumbs(
+    api: Api, v: Video, busy: Boolean,
+    onLike: (Int) -> Unit, onEdit: (Int, String) -> Unit, onPick: (Int) -> Unit,
+) {
     val ctx = LocalContext.current
+    var editing by remember { mutableStateOf<Int?>(null) }
+    var editNote by remember { mutableStateOf("") }
+    editing?.let { n ->
+        AlertDialog(
+            onDismissRequest = { editing = null },
+            title = { Text("Edit option $n") },
+            text = {
+                OutlinedTextField(value = editNote, onValueChange = { editNote = it.take(500) }, minLines = 3,
+                    placeholder = { Text("e.g. make the text bigger, change it to \"HE CAME BACK\", make the bear angrier") },
+                    modifier = Modifier.fillMaxWidth())
+            },
+            confirmButton = {
+                TextButton(enabled = editNote.isNotBlank(), onClick = { onEdit(n, editNote.trim()); editing = null; editNote = "" }) {
+                    Text("Make it")
+                }
+            },
+            dismissButton = { TextButton(onClick = { editing = null }) { Text("Cancel") } }
+        )
+    }
     val adding = v.thumbOptions > 0
     val note = when (v.thumbState) {
-        "prompting" -> if (adding) "Claude is writing 3 more thumbnail prompts…" else "Claude is writing 6 thumbnail prompts…"
+        "prompting" -> if (adding) "Claude is writing the new prompts (${v.thumbNote ?: ""})…" else "Claude is writing 6 thumbnail prompts…"
         "queued" -> "Waiting for Flow on the server…"
-        "generating" -> if (adding) "Flow is making 3 more (a few minutes)…" else "Flow is making the thumbnails (about 5–10 min)…"
+        "generating" -> if (adding) "Flow is making the new ones (a few minutes); they'll appear at the end…" else "Flow is making the thumbnails (about 5–10 min)…"
         "ready" -> "Tap the one you want." + (v.thumbDeadline?.let { " If you don't, Claude picks at $it." } ?: "")
         "picked" -> if (v.thumbBy == "Claude") "Claude picked option ${v.thumbPick}. Tap another to switch." else "Option ${v.thumbPick} in use. Tap another to switch."
         "failed" -> "Flow thumbnails failed. Tap Remake 6."
@@ -350,6 +375,7 @@ private fun FlowThumbs(api: Api, v: Video, busy: Boolean, onPick: (Int) -> Unit)
     }
     if (v.thumbOptions <= 0) return
     val canPick = v.thumbState != "generating"
+    val making = v.thumbState in listOf("prompting", "queued", "generating")
     (1..v.thumbOptions).chunked(2).forEach { pair ->
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             pair.forEach { n ->
@@ -358,7 +384,8 @@ private fun FlowThumbs(api: Api, v: Video, busy: Boolean, onPick: (Int) -> Unit)
                     .data(api.thumbOptionUrl(v.id, n) + "?v=${v.thumbVersion}_${v.thumbOptions}_${v.thumbNote.hashCode()}")
                     .apply { api.authHeaders.forEach { (k, value) -> addHeader(k, value) } }
                     .crossfade(true).build()
-                Box(Modifier.weight(1f)) {
+                Column(Modifier.weight(1f)) {
+                Box {
                     AsyncImage(
                         model = req, contentDescription = "Option $n", contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(8.dp))
@@ -370,6 +397,17 @@ private fun FlowThumbs(api: Api, v: Video, busy: Boolean, onPick: (Int) -> Unit)
                         "$n", color = Color.White, style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp).background(Color(0x99000000), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp)
                     )
+                }
+                Row {
+                    TextButton(onClick = { onLike(n) }, enabled = !busy && canPick && !making,
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp)) {
+                        Text("3 like this", style = MaterialTheme.typography.labelMedium)
+                    }
+                    TextButton(onClick = { editing = n }, enabled = !busy && canPick && !making,
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp)) {
+                        Text("Edit", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
                 }
             }
             if (pair.size == 1) Spacer(Modifier.weight(1f))

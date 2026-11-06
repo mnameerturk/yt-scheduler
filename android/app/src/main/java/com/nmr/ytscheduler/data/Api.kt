@@ -177,7 +177,10 @@ class Api(ctx: Context) {
     fun thumbOptionUrl(id: Int, n: Int) = "$base/api/videos/$id/thumb-options/$n"
 
     suspend fun moreTitles(id: Int): Video = parseVideo(JSONObject(request("POST", "/api/videos/$id/more-titles")))
-    suspend fun moreThumbnails(id: Int): Video = parseVideo(JSONObject(request("POST", "/api/videos/$id/more-thumbnails")))
+    /** kind: "new" (3 new ideas), "like" (3 like [option]), "edit" (1 copy of [option] with [note] applied) */
+    suspend fun moreThumbnails(id: Int, kind: String = "new", option: Int? = null, note: String = ""): Video =
+        parseVideo(JSONObject(request("POST", "/api/videos/$id/more-thumbnails", JSONObject().put("kind", kind)
+            .put("option", option ?: JSONObject.NULL).put("note", note))))
     suspend fun autoThumbnail(id: Int): Video = parseVideo(JSONObject(request("POST", "/api/videos/$id/auto-thumbnail")))
     suspend fun pickThumbnail(id: Int, n: Int): Video =
         parseVideo(JSONObject(request("POST", "/api/videos/$id/thumb-pick", JSONObject().put("option", n))))
