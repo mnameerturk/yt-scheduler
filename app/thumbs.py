@@ -582,11 +582,12 @@ def _save_uploads(job, images):
     src = FLOW_DIR / job
     src.mkdir(parents=True, exist_ok=True)
     for im in images or []:
-        name = re.sub(r"[^a-zA-Z0-9]", "", str(im.get("name", "")))[:20]
+        name = re.sub(r"[^a-zA-Z0-9_]", "", str(im.get("name", "")))[:20]
         m = re.match(r"data:image/(png|jpe?g|webp);base64,(.*)$", str(im.get("data", "")), re.S)
         if name and m:
             ext = "jpg" if m[1].startswith("jp") else m[1]
-            (src / f"{name}_v1.{ext}").write_bytes(base64.b64decode(m[2]))
+            stem = name if re.fullmatch(r"t\d+_v\d+", name) else f"{name}_v1"
+            (src / f"{stem}.{ext}").write_bytes(base64.b64decode(m[2]))
 
 
 def flow_done(job, images=None):

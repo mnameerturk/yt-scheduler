@@ -520,6 +520,16 @@ def flow_next():
     return thumbs.next_flow_job() or {}
 
 
+@app.post("/api/flow/upload", dependencies=[api])
+def flow_upload(data: dict = Body(...)):
+    """One image from the extension (Flow on the PC); /api/flow/done follows when all are sent."""
+    job = str(data.get("job", ""))
+    if not db.q("SELECT id FROM videos WHERE thumb_job=?", (job,), one=True):
+        raise HTTPException(404, "unknown job")
+    thumbs._save_uploads(job, [data])
+    return {"ok": True}
+
+
 @app.post("/api/flow/done", dependencies=[api])
 def flow_done(data: dict = Body(...)):
     return thumbs.flow_done(str(data.get("job", "")), data.get("images"))
