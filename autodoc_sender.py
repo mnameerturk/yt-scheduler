@@ -15,8 +15,9 @@ the thumbnails while AutoDoc renders. When the render finishes, the file is uplo
 Flow Agent thumbnails: after you tap "Copy for Flow Agent" in the app, image downloads that look like a
 thumbnail (16:9) in your Downloads folder during the next 3 hours are added to that video as options.
 
-Which file is sent: final_captioned.mp4 if you made one, otherwise final.mp4. New renders wait
-WAIT_MINUTES after finishing first, so there's time to add captions. Settings: autodoc_sender.json
+Which file is sent: final.mp4 - AutoDoc's finished render, with the channel's background music mixed in
+and no captions (captions are off). A final_captioned.mp4 is only used if "use_captioned" is true in
+autodoc_sender.json. Settings: autodoc_sender.json
 """
 import argparse
 import json
@@ -37,7 +38,7 @@ EARLY = ".scheduler_entry.json"   # created before the render finished
 DEFAULTS = {
     "projects_dir": r"D:\New folder (4)\autodoc_projects",
     "channels": {"wildlife": "Lost Archive", "ancient_history": "Known"},  # AutoDoc profile -> part of channel name
-    "wait_minutes": 30,
+    "wait_minutes": 5,     # let the finished file settle before sending
     "check_every_seconds": 120,
     "downloads_dir": str(Path.home() / "Downloads"),
     "watch_downloads": False,   # the Flow extension sends Agent images itself; turn on if you don't use it
@@ -81,7 +82,9 @@ def finished(p):
 
 def video_file(p):
     cap = p / "final_captioned.mp4"
-    return cap if cap.exists() else p / "final.mp4"
+    if conf().get("use_captioned") and cap.exists():
+        return cap
+    return p / "final.mp4"
 
 
 def profile(p):
