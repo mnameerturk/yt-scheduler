@@ -209,6 +209,7 @@ def _video_out(v):
         "thumb_deadline_local": _local(dl.isoformat()) if (dl := thumbs.deadline(v)) else None,
         "meta_state": v.get("meta_state"), "meta_note": v.get("meta_note"),
         "title_options": json.loads(v.get("meta_titles") or "[]"),
+        "thumb_prompts": json.loads(v.get("thumb_prompts") or "[]"),
         "option_prompts": [thumbs.option_prompt(v, k) for k in range(1, len(json.loads(v.get("thumb_options") or "[]")) + 1)],
         "extra_prompts": json.loads(v.get("extra_prompts") or "[]"),
         "prompts_state": v.get("prompts_state"), "prompts_note": v.get("prompts_note"),

@@ -40,6 +40,7 @@ DEFAULTS = {
     "wait_minutes": 30,
     "check_every_seconds": 120,
     "downloads_dir": str(Path.home() / "Downloads"),
+    "watch_downloads": False,   # the Flow extension sends Agent images itself; turn on if you don't use it
 }
 INBOX_STATE = HERE / "autodoc_sender_inbox.json"
 IMG_EXT = {".png", ".jpg", ".jpeg", ".webp"}
@@ -272,7 +273,8 @@ def main():
     last_scan = 0
     while True:
         try:
-            watch_downloads(srv, c)               # every 15 s: Flow Agent downloads
+            if c.get("watch_downloads"):
+                watch_downloads(srv, c)           # every 15 s: Flow Agent downloads
         except (Exception, SystemExit):  # noqa: BLE001
             log("downloads watch error: " + traceback.format_exc(limit=1).replace("\n", " | "))
         if time.time() - last_scan >= c["check_every_seconds"]:

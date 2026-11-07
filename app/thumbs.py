@@ -758,7 +758,7 @@ def start():
 
 # ---------- Flow Agent (manual, safe) ----------
 
-AGENT_MSG = """Please generate the YouTube thumbnail images below. For EVERY prompt: aspect ratio 16:9, {k} variations, use the best image model (Nano Banana). Follow each prompt exactly, including all the overlay text spelled exactly as written. Don't change, merge or skip prompts. Name the images "{tag}-1a", "{tag}-1b", "{tag}-2a" and so on.
+AGENT_MSG = """[{tag}] Please generate the YouTube thumbnail images below. For EVERY prompt: aspect ratio 16:9, {k} variations, use the best image model (Nano Banana). Follow each prompt exactly, including all the overlay text spelled exactly as written. Don't change, merge or skip prompts. Name the images "{tag}-1a", "{tag}-1b", "{tag}-2a" and so on.
 
 {prompts}"""
 
