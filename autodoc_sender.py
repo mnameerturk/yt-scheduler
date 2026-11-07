@@ -12,6 +12,9 @@ Early start: as soon as a new project's voiceover is done (its script is final),
 scheduler as "being made in AutoDoc" with the script, so Claude writes the titles/description and Flow makes
 the thumbnails while AutoDoc renders. When the render finishes, the file is uploaded and attached to it.
 
+Flow Agent thumbnails: after you tap "Copy for Flow Agent" in the app, image downloads that look like a
+thumbnail (16:9) in your Downloads folder during the next 3 hours are added to that video as options.
+
 Which file is sent: final_captioned.mp4 if you made one, otherwise final.mp4. New renders wait
 WAIT_MINUTES after finishing first, so there's time to add captions. Settings: autodoc_sender.json
 """
@@ -36,7 +39,10 @@ DEFAULTS = {
     "channels": {"wildlife": "Lost Archive", "ancient_history": "Known"},  # AutoDoc profile -> part of channel name
     "wait_minutes": 30,
     "check_every_seconds": 120,
+    "downloads_dir": str(Path.home() / "Downloads"),
 }
+INBOX_STATE = HERE / "autodoc_sender_inbox.json"
+IMG_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 
 
 def log(msg):
@@ -189,6 +195,43 @@ def scan(srv, c):
             log(f"{p.name}: not sent yet ({e}); will retry")
 
 
+def watch_downloads(srv, c):
+    """Images you download from Flow while a video is waiting for them -> options for that video."""
+    ib = srv.req("GET", "/api/inbox")
+    if not ib.get("video_id"):
+        return
+    try:
+        from PIL import Image
+    except ImportError:
+        Image = None
+    seen = json.loads(INBOX_STATE.read_text(encoding="utf-8")) if INBOX_STATE.exists() else {}
+    folder = Path(c["downloads_dir"])
+    now = time.time()
+    for f in sorted(folder.glob("*"), key=lambda x: x.stat().st_mtime if x.exists() else 0):
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        key = f"{f.name}|{int(st.st_mtime)}|{st.st_size}"
+        if (f.suffix.lower() not in IMG_EXT or key in seen or st.st_mtime < ib["since"]
+                or now - st.st_mtime < 5 or st.st_size < 40_000):
+            continue
+        if Image:
+            try:
+                with Image.open(f) as im:
+                    ratio = im.width / im.height
+                if not 1.55 <= ratio <= 1.95:      # not a 16:9 thumbnail: leave it alone
+                    seen[key] = "skipped"
+                    continue
+            except Exception:  # noqa: BLE001
+                continue
+        with f.open("rb") as fh:
+            r = srv.req("POST", f"/api/videos/{ib['video_id']}/add-option", files={"file": (f.name, fh)})
+        seen[key] = ib["video_id"]
+        log(f"Flow Agent image {f.name} -> video #{ib['video_id']} (option {r.get('options')})")
+    INBOX_STATE.write_text(json.dumps(dict(list(seen.items())[-500:])), encoding="utf-8")
+
+
 def single_instance():
     s = socket.socket()
     try:
@@ -226,12 +269,19 @@ def main():
         return
     lock = single_instance()  # noqa: F841
     log(f"watching {root} (new renders wait {c['wait_minutes']} min before sending)")
+    last_scan = 0
     while True:
         try:
-            scan(srv, c)
+            watch_downloads(srv, c)               # every 15 s: Flow Agent downloads
         except (Exception, SystemExit):  # noqa: BLE001
-            log("scan error: " + traceback.format_exc(limit=2).replace("\n", " | "))
-        time.sleep(c["check_every_seconds"])
+            log("downloads watch error: " + traceback.format_exc(limit=1).replace("\n", " | "))
+        if time.time() - last_scan >= c["check_every_seconds"]:
+            last_scan = time.time()
+            try:
+                scan(srv, c)
+            except (Exception, SystemExit):  # noqa: BLE001
+                log("scan error: " + traceback.format_exc(limit=2).replace("\n", " | "))
+        time.sleep(15)
 
 
 if __name__ == "__main__":

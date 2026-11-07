@@ -628,3 +628,35 @@ def attach_file(vid: int, data: dict = Body(...)):
               file_size=data.get("file_size"), status="scheduled" if v["publish_at"] else "draft")
     scheduler.wake()
     return _video_out(_get_video(vid))
+
+
+# ---------- Flow Agent workflow ----------
+
+@app.post("/api/videos/{vid}/agent-copy", dependencies=[api])
+def agent_copy(vid: int):
+    """Text to paste into Google's Flow Agent. For the next 3 hours, thumbnail-shaped images downloaded on the PC
+    are added to this video automatically (autodoc_sender watches the Downloads folder)."""
+    _get_video(vid)
+    try:
+        text = thumbs.agent_message(vid)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    return {"text": text, "video": _video_out(_get_video(vid))}
+
+
+@app.get("/api/inbox", dependencies=[api])
+def get_inbox():
+    return thumbs.inbox()
+
+
+@app.post("/api/videos/{vid}/add-option", dependencies=[api])
+async def add_option(vid: int, file: UploadFile = File(...)):
+    _get_video(vid)
+    raw = await file.read()
+    if len(raw) > 25 * 1024 * 1024:
+        raise HTTPException(413, "image too big")
+    try:
+        n = thumbs.add_option(vid, raw)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"not a usable image: {e}")
+    return {"ok": True, "options": n}

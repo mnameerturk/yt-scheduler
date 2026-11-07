@@ -44,7 +44,7 @@ class Server:
             except requests.RequestException as e:
                 if attempt == 4:
                     sys.exit(f"Can't reach the server ({e.__class__.__name__}). "
-                             "Check that run_windows.bat and the ngrok window are running, then try again.")
+                             "Check your internet, then try again.")
                 print("Connection hiccup, retrying...")
                 time.sleep(3 * (attempt + 1))
         if r.status_code == 401:

@@ -202,7 +202,10 @@ private fun VideoCard(v: Video, api: Api, onClick: () -> Unit) {
 }
 
 fun thumbBadge(v: Video): String? = when (v.thumbState) {
-    "prompting", "queued" -> "Thumbnails: waiting for Flow"
+    "prompting" -> "Thumbnails: Claude is writing prompts"
+    "prompts_ready" -> "Thumbnail prompts ready: copy to Flow Agent"
+    "waiting_images" -> "Waiting for your Flow downloads"
+    "queued" -> "Thumbnails: waiting for Flow"
     "generating" -> "Thumbnails: Flow is making them"
     "ready" -> "Pick a thumbnail" + (v.thumbDeadline?.let { " (Claude picks at $it)" } ?: "")
     "failed" -> "Thumbnails failed"

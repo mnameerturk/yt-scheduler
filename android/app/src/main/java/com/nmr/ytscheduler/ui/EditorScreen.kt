@@ -203,8 +203,23 @@ fun EditorScreen(videoId: Int, onBack: () -> Unit) {
                 }
                 val making = v.thumbState in listOf("prompting", "queued", "generating")
                 OutlinedButton(onClick = { act { fill(api.autoThumbnail(videoId)) } }, enabled = !busy && !making) {
-                    Text(if (v.thumbState == null) "Make with Flow" else "Remake all")
+                    Text(if (v.thumbState == null) "Write prompts" else "Rewrite prompts")
                 }
+            }
+            if (v.status != "posting" && v.thumbState != null && v.thumbState != "prompting") {
+                val clipA = androidx.compose.ui.platform.LocalClipboardManager.current
+                Button(enabled = !busy, modifier = Modifier.fillMaxWidth(), onClick = {
+                    act {
+                        clipA.setText(androidx.compose.ui.text.AnnotatedString(api.agentCopy(videoId)))
+                        fill(api.video(videoId))
+                        toast(ctx, "Copied. Paste it into Flow (Agent on), then download the ones you like on the PC")
+                    }
+                }) { Text("Copy for Flow Agent") }
+                Text(
+                    "Open Flow on the PC, new project, turn on Agent, paste. Download the images you like: for 3 hours " +
+                        "the PC adds every 16:9 image you download to this video.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
             if (v.status != "posting") OutlinedButton(
                 onClick = { act { fill(api.morePrompts(videoId)); toast(ctx, "Claude is writing 3 new prompts…") } },
@@ -221,7 +236,7 @@ fun EditorScreen(videoId: Int, onBack: () -> Unit) {
             }
             FlowThumbs(api, v, busy,
                 onLike = { n -> act { fill(api.morePrompts(videoId, "like", n)); toast(ctx, "Claude is writing 3 prompts like option $n…") } },
-                onEdit = { n, note -> act { fill(api.moreThumbnails(videoId, "edit", n, note)); toast(ctx, "Making an edited copy of option $n…") } },
+                onEdit = { n, note -> act { fill(api.moreThumbnails(videoId, "edit", n, note)); toast(ctx, "Claude is writing an edited prompt for option $n…") } },
             ) { n ->
                 act {
                     fill(api.pickThumbnail(videoId, n))
@@ -372,7 +387,7 @@ private fun FlowThumbs(
             },
             confirmButton = {
                 TextButton(enabled = editNote.isNotBlank(), onClick = { onEdit(n, editNote.trim()); editing = null; editNote = "" }) {
-                    Text("Make it")
+                    Text("Write prompt")
                 }
             },
             dismissButton = { TextButton(onClick = { editing = null }) { Text("Cancel") } }
@@ -381,6 +396,8 @@ private fun FlowThumbs(
     val adding = v.thumbOptions > 0
     val note = when (v.thumbState) {
         "prompting" -> if (adding) "Claude is writing the new prompts (${v.thumbNote ?: ""})…" else "Claude is writing the thumbnail prompts…"
+        "prompts_ready" -> "Prompts ready. Tap Copy for Flow Agent."
+        "waiting_images" -> "Waiting for the images you download from Flow on the PC…"
         "queued" -> "Waiting for Flow on the server…"
         "generating" -> if (adding) "Flow is making the new ones (a few minutes); they'll appear at the end…" else "Flow is making the thumbnails (about 5–10 min)…"
         "ready" -> "Tap the one you want." + (v.thumbDeadline?.let { " If you don't, Claude picks at $it." } ?: "")

@@ -62,6 +62,8 @@ TOOLS = [
      "or kind=like with option N (3 similar to that option). Read them later with get_video (extra_prompts).",
      _schema({**VID, "kind": {"type": "string", "enum": ["new", "like"]}, "option": {"type": "integer"}},
              ["video_id", "kind"])),
+    ("flow_agent_message", "The message nmr pastes into Google's Flow Agent to make this video's thumbnails. For the "
+     "next 3 hours, 16:9 images he downloads on his PC are added to this video automatically.", _schema(VID, ["video_id"])),
     ("post_now", "Upload this video to YouTube right now.", _schema(VID, ["video_id"])),
     ("retry_video", "Retry a failed upload.", _schema(VID, ["video_id"])),
     ("delete_video", "Delete a video from the scheduler and its Drive copy (not from YouTube). Only after the user "
@@ -127,6 +129,8 @@ def run_tool(m, name, a):
         else:
             m.more_thumbnails(vid, {"kind": kind, "option": a.get("option"), "note": a.get("note", "")})
         return "Started. Claude writes the prompts, then Flow makes them (a few minutes); use view_thumbnails later."
+    if name == "flow_agent_message":
+        return m.agent_copy(vid)["text"]
     if name == "more_prompts":
         m.more_prompts(vid, {"kind": a["kind"], "option": a.get("option")})
         return "Claude is writing them; check get_video (extra_prompts) in a minute or two."

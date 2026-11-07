@@ -192,6 +192,8 @@ class Api(ctx: Context) {
     suspend fun morePrompts(id: Int, kind: String = "new", option: Int? = null): Video =
         parseVideo(JSONObject(request("POST", "/api/videos/$id/more-prompts", JSONObject().put("kind", kind)
             .put("option", option ?: JSONObject.NULL))))
+    /** Message to paste into Google's Flow Agent; the PC adds downloaded images to this video for 3 hours. */
+    suspend fun agentCopy(id: Int): String = JSONObject(request("POST", "/api/videos/$id/agent-copy")).getString("text")
     suspend fun retryFlow(id: Int): Video = parseVideo(JSONObject(request("POST", "/api/videos/$id/retry-flow")))
     suspend fun autoThumbnail(id: Int): Video = parseVideo(JSONObject(request("POST", "/api/videos/$id/auto-thumbnail")))
     suspend fun pickThumbnail(id: Int, n: Int): Video =

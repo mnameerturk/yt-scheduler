@@ -32,7 +32,15 @@ log = logging.getLogger("thumbs")
 
 OPTIONS = int(os.getenv("THUMB_OPTIONS", "6"))
 MORE = int(os.getenv("MORE_COUNT", "3"))
-IMAGES_PER_PROMPT = int(os.getenv("IMAGES_PER_PROMPT", "2"))   # Flow makes this many images per prompt   # extra titles / thumbnails per "more" tap
+IMAGES_PER_PROMPT = int(os.getenv("IMAGES_PER_PROMPT", "2"))
+# agent (default): prompts are written, you paste them into Google's Flow Agent, the PC uploads what you download.
+# extension: the old Chrome-extension autopilot takes the jobs (Google flags it; not recommended).
+FLOW_MODE = os.getenv("FLOW_MODE", "agent").strip().lower()
+INBOX_HOURS = 3   # how long downloads go to the video you last copied for the Agent
+
+
+def _ready_state():
+    return "queued" if FLOW_MODE == "extension" else "prompts_ready"   # Flow makes this many images per prompt   # extra titles / thumbnails per "more" tap
 PICK_BEFORE = timedelta(hours=float(os.getenv("THUMB_PICK_HOURS", "2")))
 FLOW_DIR = Path(os.getenv("FLOW_DOWNLOADS", str(Path.home() / "Downloads" / "FlowStorybooks")))
 OPT_DIR = DATA_DIR / "thumbopts"
@@ -398,10 +406,10 @@ def _meta_tick():
                 footer = desc_footer(v["channel_account_id"])
                 fields["description"] = desc + ("\n\n" + footer if footer else "")
         if fresh.get("thumb_state") == "prompting" and len(prompts) >= 2:
-            fields.update(thumb_prompts=json.dumps(prompts), thumb_state="queued",
+            fields.update(thumb_prompts=json.dumps(prompts), thumb_state=_ready_state(),
                           thumb_note="prompts written by Opus from the script")
         db.update("videos", v["id"], **fields)
-        _event("meta", v["id"], f"Title ready: {titles[0]}")
+        _event("meta", v["id"], f"Title + thumbnail prompts ready: {titles[0]}")
 
 
 # ---------- jobs ----------
@@ -702,10 +710,21 @@ def _tick():
                 continue
             prompts = fallback_prompts(v)
             prompts, note = (prompts[:MORE] if more else prompts), f"basic prompts used (Claude: {str(e)[:150]})"
+        if more and FLOW_MODE != "extension":
+            # Agent mode: "more / like / edit" give prompts to paste, not a Flow job
+            extra = json.loads(v.get("extra_prompts") or "[]")
+            label = {"like": f"like option {req.get('option')}", "edit": f"edit of option {req.get('option')}"}.get(kind, "new idea")
+            extra += [{"label": label, "prompt": p} for p in prompts]
+            db.update("videos", v["id"], extra_prompts=json.dumps(extra), thumb_append=None, thumb_req=None,
+                      thumb_state="picked" if v["thumb_pick"] else "ready", thumb_note=note)
+            _event("prompts", v["id"], f"New thumbnail prompts: {v.get('title') or v['file_name']}")
+            continue
         if more:
             # the new prompts go after the ones already made; the Flow job only runs the new ones
             db.update("videos", v["id"], thumb_append=len(old))
-        db.update("videos", v["id"], thumb_prompts=json.dumps(old + prompts), thumb_state="queued", thumb_note=note)
+        db.update("videos", v["id"], thumb_prompts=json.dumps(old + prompts), thumb_state=_ready_state(), thumb_note=note)
+        if FLOW_MODE != "extension":
+            _event("prompts", v["id"], f"Thumbnail prompts ready, copy them to the Flow Agent: {v.get('title') or v['file_name']}")
 
     now = datetime.now(timezone.utc)
     for v in db.q("SELECT * FROM videos WHERE thumb_state='ready'"):
@@ -732,4 +751,66 @@ def loop():
 
 
 def start():
+    if FLOW_MODE != "extension":   # nothing takes Flow jobs any more: those videos just need their prompts copied
+        db.x("UPDATE videos SET thumb_state='prompts_ready', thumb_job=NULL WHERE thumb_state IN ('queued','generating')")
     threading.Thread(target=loop, daemon=True, name="thumbs").start()
+
+
+# ---------- Flow Agent (manual, safe) ----------
+
+AGENT_MSG = """Please generate the YouTube thumbnail images below. For EVERY prompt: aspect ratio 16:9, {k} variations, use the best image model (Nano Banana). Follow each prompt exactly, including all the overlay text spelled exactly as written. Don't change, merge or skip prompts. Name the images "{tag}-1a", "{tag}-1b", "{tag}-2a" and so on.
+
+{prompts}"""
+
+
+def agent_message(vid):
+    """The message to paste into the Flow Agent; downloads during the next hours go to this video."""
+    v = db.q("SELECT * FROM videos WHERE id=?", (vid,), one=True)
+    prompts = json.loads(v["thumb_prompts"] or "[]")
+    if not prompts:
+        raise ValueError("no thumbnail prompts yet")
+    extra = [e["prompt"] for e in json.loads(v.get("extra_prompts") or "[]")]
+    allp = prompts + [p for p in extra if p not in prompts]
+    text = AGENT_MSG.format(k=IMAGES_PER_PROMPT, tag=f"nmr{vid}",
+                            prompts="\n\n".join(f"{i}) {p}" for i, p in enumerate(allp, 1)))
+    db.kv_set("inbox", {"video_id": vid, "since": time.time(), "prompts": allp})
+    note = "copied for the Flow Agent; downloaded images will be added here"
+    if v["thumb_state"] in (None, "prompts_ready", "failed", "queued"):
+        db.update("videos", vid, thumb_state="waiting_images", thumb_note=note)
+    return text
+
+
+def inbox():
+    ib = db.kv_get("inbox", None) or {}
+    if not ib or time.time() - ib.get("since", 0) > INBOX_HOURS * 3600:
+        return {}
+    v = db.q("SELECT id, title FROM videos WHERE id=?", (ib["video_id"],), one=True)
+    return {"video_id": ib["video_id"], "since": ib["since"], "title": v["title"] if v else ""} if v else {}
+
+
+def add_option(vid, raw, prompt=""):
+    """One image you made yourself (Flow Agent download, etc.) becomes a new option."""
+    v = db.q("SELECT * FROM videos WHERE id=?", (vid,), one=True)
+    out = OPT_DIR / str(vid)
+    out.mkdir(parents=True, exist_ok=True)
+    opts = json.loads(v["thumb_options"] or "[]")
+    op = json.loads(v.get("thumb_opt_prompts") or "[]")
+    op += [""] * (len(opts) - len(op))
+    tmp = out / "incoming.tmp"
+    tmp.write_bytes(raw)
+    dst = out / f"option{len(opts) + 1}.jpg"
+    _save_jpeg(tmp, dst)
+    tmp.unlink(missing_ok=True)
+    opts.append(str(dst))
+    op.append(prompt)
+    keep_pick = v["thumb_state"] == "picked"
+    dl = deadline(v)
+    db.update("videos", vid, thumb_options=json.dumps(opts), thumb_opt_prompts=json.dumps(op),
+              thumb_state="picked" if keep_pick else "ready",
+              thumb_note=f"{len(opts)} options" + (f"; Claude picks at {dl.isoformat()} if you don't" if dl and not keep_pick else ""))
+    last = db.kv_get(f"inbox_note:{vid}", 0)
+    if time.time() - last > 600:   # one notification per batch, not per image
+        db.kv_set(f"inbox_note:{vid}", time.time())
+        _event("ready", vid, f"New thumbnails added: {v.get('title') or v['file_name']}")
+    wake()
+    return len(opts)
