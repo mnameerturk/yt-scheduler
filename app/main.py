@@ -520,6 +520,13 @@ def flow_next():
     return thumbs.next_flow_job() or {}
 
 
+@app.get("/api/flow/job/{job}", dependencies=[api])
+def flow_job(job: str):
+    """Is this job still wanted? (The extension asks before restarting a run that was cut off.)"""
+    v = db.q("SELECT thumb_state FROM videos WHERE thumb_job=?", (job,), one=True)
+    return {"active": bool(v and v["thumb_state"] == "generating")}
+
+
 @app.post("/api/flow/upload", dependencies=[api])
 def flow_upload(data: dict = Body(...)):
     """One image from the extension (Flow on the PC); /api/flow/done follows when all are sent."""
