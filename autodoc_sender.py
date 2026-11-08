@@ -38,7 +38,7 @@ EARLY = ".scheduler_entry.json"   # created before the render finished
 DEFAULTS = {
     "projects_dir": r"D:\New folder (4)\autodoc_projects",
     "channels": {"wildlife": "Lost Archive", "ancient_history": "Known"},  # AutoDoc profile -> part of channel name
-    "wait_minutes": 5,     # let the finished file settle before sending
+    "wait_minutes": 0,     # no longer used: finished renders are sent right away
     "check_every_seconds": 120,
     "downloads_dir": str(Path.home() / "Downloads"),
     "watch_downloads": False,   # the Flow extension sends Agent images itself; turn on if you don't use it
@@ -191,8 +191,8 @@ def scan(srv, c):
         if not done or done < c["since"]:
             continue
         vf = video_file(p)
-        if now - max(done, vf.stat().st_mtime) < c["wait_minutes"] * 60:
-            continue  # give time to add captions / let the file settle
+        if now - max(done, vf.stat().st_mtime) < 20:
+            continue  # AutoDoc marks a render done only after final.mp4 is complete; 20 s just to be safe
         try:
             send(srv, p, c)
         except (Exception, SystemExit) as e:  # noqa: BLE001  (server/Drive unreachable -> next round)
@@ -272,7 +272,7 @@ def main():
             send(srv, p, c)
         return
     lock = single_instance()  # noqa: F841
-    log(f"watching {root} (new renders wait {c['wait_minutes']} min before sending)")
+    log(f"watching {root} (finished renders are sent right away)")
     last_scan = 0
     while True:
         try:

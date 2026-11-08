@@ -788,6 +788,166 @@ def inbox():
     return {"video_id": ib["video_id"], "since": ib["since"], "title": v["title"] if v else ""} if v else {}
 
 
+# ---------- duplicates: the same picture never becomes two options ----------
+
+def _dhash(src):
+    """64-bit difference hash: near-identical pictures (same image at another size or
+    JPEG quality) get hashes only a few bits apart."""
+    im = Image.open(io.BytesIO(src) if isinstance(src, (bytes, bytearray)) else src)
+    g = ImageOps.exif_transpose(im).convert("L").resize((9, 8), Image.Resampling.LANCZOS)
+    px = list(g.getdata())
+    bits = 0
+    for r in range(8):
+        for c in range(8):
+            bits = (bits << 1) | (px[r * 9 + c] > px[r * 9 + c + 1])
+    return bits
+
+
+def _hashes(vid):
+    v = db.q("SELECT thumb_options FROM videos WHERE id=?", (vid,), one=True)
+    out = []
+    for f in json.loads((v and v["thumb_options"]) or "[]"):
+        try:
+            out.append(_dhash(f))
+        except Exception:  # noqa: BLE001
+            pass
+    return out
+
+
+def is_duplicate(vid, raw, hashes=None):
+    try:
+        h = _dhash(raw)
+    except Exception:  # noqa: BLE001
+        return False
+    return any(bin(h ^ x).count("1") <= 5 for x in (hashes if hashes is not None else _hashes(vid)))
+
+
+_opt_lock = threading.Lock()
+
+
+def add_option_once(vid, raw, prompt=""):
+    """add_option, unless this picture is already one of the video's options.
+    Returns (options count, was_duplicate)."""
+    with _opt_lock:
+        if is_duplicate(vid, raw):
+            v = db.q("SELECT thumb_options FROM videos WHERE id=?", (vid,), one=True)
+            return len(json.loads(v["thumb_options"] or "[]")), True
+        return add_option(vid, raw, prompt), False
+
+
+# ---------- one Flow Agent message for every video still needing thumbnails ----------
+
+BATCH_MSG = """Please generate YouTube thumbnail images for {n} different videos. For EVERY prompt below: aspect ratio 16:9, {k} variations, use the best image model (Nano Banana). Follow each prompt exactly, including all overlay text spelled exactly as written. Don't change, merge or skip prompts, and don't mix prompts between videos.
+
+Every prompt has a code like [nmr12-3]. The code is only a label: name each image with its code plus a letter for the variation (for example "nmr12-3a", "nmr12-3b"), and never draw the code in the image.
+
+{body}"""
+
+
+def pending_thumb_videos():
+    """Videos that have prompts but no thumbnail options yet (and aren't posted)."""
+    rows = db.q("SELECT * FROM videos WHERE status NOT IN ('posting','posted') ORDER BY id")
+    out = []
+    for v in rows:
+        if not json.loads(v["thumb_prompts"] or "[]"):
+            continue
+        if json.loads(v["thumb_options"] or "[]") or v["thumb_state"] in ("picked", "ready", "prompting"):
+            continue
+        out.append(v)
+    return out
+
+
+def agent_batch_message(ids=None):
+    vids = [v for v in pending_thumb_videos() if not ids or v["id"] in ids]
+    if not vids:
+        raise ValueError("no videos are waiting for thumbnails")
+    parts = []
+    for v in vids:
+        prompts = json.loads(v["thumb_prompts"] or "[]")
+        extra = [e["prompt"] for e in json.loads(v.get("extra_prompts") or "[]")]
+        allp = prompts + [p for p in extra if p not in prompts]
+        title = v["title"] or v["file_name"] or f"video {v['id']}"
+        parts.append(f"=== VIDEO nmr{v['id']}: {title} ===\n\n"
+                     + "\n\n".join(f"[nmr{v['id']}-{i}] {p}" for i, p in enumerate(allp, 1)))
+    text = BATCH_MSG.format(n=len(vids), k=IMAGES_PER_PROMPT, body="\n\n".join(parts))
+    db.kv_set("inbox_multi", {"videos": [v["id"] for v in vids], "since": time.time()})
+    for v in vids:
+        db.update("videos", v["id"], thumb_state="waiting_images",
+                  thumb_note="in the Flow Agent batch; images are matched to this video automatically")
+    return text, [v["id"] for v in vids]
+
+
+def inbox_videos():
+    """Videos images may currently belong to: the last batch message and the last single message."""
+    ids = []
+    m = db.kv_get("inbox_multi", None) or {}
+    if m and time.time() - m.get("since", 0) <= INBOX_HOURS * 3600:
+        ids += list(m.get("videos") or [])
+    one = inbox()
+    if one and one["video_id"] not in ids:
+        ids.append(one["video_id"])
+    live = []
+    for i in ids:
+        v = db.q("SELECT id, status FROM videos WHERE id=?", (i,), one=True)
+        if v and v["status"] not in ("posting", "posted"):
+            live.append(i)
+    return live
+
+
+MATCH_PROMPT = """Read the image file {img}. It is a YouTube thumbnail made from ONE of the prompt lists below.
+Look at its overlay text and its subject, and decide which video it belongs to.
+
+{lists}
+
+Reply with ONLY this JSON: {{"video": <the video number>}} - or {{"video": null}} if it clearly matches none."""
+
+
+def _match_video(raw, cands):
+    tmp = OPT_DIR / "_match"
+    tmp.mkdir(parents=True, exist_ok=True)
+    f = tmp / f"img_{int(time.time() * 1000)}.jpg"
+    f.write_bytes(raw)
+    try:
+        lists = []
+        for vid in cands:
+            v = db.q("SELECT * FROM videos WHERE id=?", (vid,), one=True)
+            ps = json.loads(v["thumb_prompts"] or "[]") + [
+                e["prompt"] for e in json.loads(v.get("extra_prompts") or "[]")]
+            lists.append(f"VIDEO {vid} ({v['title'] or v['file_name']}):\n"
+                         + "\n".join(f"- {p[:400]}" for p in ps))
+        out = ask_claude(MATCH_PROMPT.format(img=f.name, lists="\n\n".join(lists)), tmp,
+                         timeout=300, model=SUMMARY_MODEL)
+        got = _json_in(out, "{").get("video")
+        return int(got) if got and int(got) in cands else None
+    finally:
+        f.unlink(missing_ok=True)
+
+
+def auto_option(raw, tag=None):
+    """An image from the Flow Agent whose video the extension couldn't see on the page.
+    Returns {"video": id or None, "options": n, "duplicate": bool, "how": ...}."""
+    cands = inbox_videos()
+    if tag and db.q("SELECT id FROM videos WHERE id=?", (tag,), one=True):
+        n, dup = add_option_once(tag, raw)
+        return {"video": tag, "options": n, "duplicate": dup, "how": "tag"}
+    if not cands:
+        return {"video": None, "options": 0, "duplicate": False, "how": "no video waiting"}
+    for vid in cands:                       # already an option of one of them?
+        if is_duplicate(vid, raw):
+            return {"video": vid, "options": len(_hashes(vid)), "duplicate": True, "how": "duplicate"}
+    if len(cands) == 1:
+        vid, how = cands[0], "only video waiting"
+    else:
+        vid, how = _match_video(raw, cands), "matched by Claude"
+    if not vid:
+        un = OPT_DIR / "unassigned"
+        un.mkdir(parents=True, exist_ok=True)
+        (un / f"{int(time.time() * 1000)}.jpg").write_bytes(raw)
+        return {"video": None, "options": 0, "duplicate": False, "how": "no match (kept aside)"}
+    n, dup = add_option_once(vid, raw)
+    return {"video": vid, "options": n, "duplicate": dup, "how": how}
+
+
 def add_option(vid, raw, prompt=""):
     """One image you made yourself (Flow Agent download, etc.) becomes a new option."""
     v = db.q("SELECT * FROM videos WHERE id=?", (vid,), one=True)

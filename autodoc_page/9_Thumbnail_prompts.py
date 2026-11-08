@@ -15,8 +15,9 @@ STATE = {"prompting": "Claude is writing the prompts…", "prompts_ready": "Prom
          "picked": "Thumbnail picked", "failed": "Failed"}
 
 st.title("Thumbnail prompts")
-st.caption("Copy a video's Flow Agent message (copy icon, top right of the box), open Flow, make a new project, "
-           "turn on Agent and paste. The Flow extension uploads the images to that video by itself.")
+st.caption("Easiest: copy ONE message for all videos still waiting for thumbnails (below), open Flow, make a new "
+           "project, turn on Agent and paste. The Flow extension sends every finished image to the right video "
+           "by itself, once.")
 
 try:
     conf = json.loads(CONF.read_text())
@@ -34,8 +35,8 @@ def code(text):
         st.code(text, language=None)
 
 
-def api(method, path):
-    r = requests.request(method, BASE + path, headers=H, timeout=60)
+def api(method, path, **kw):
+    r = requests.request(method, BASE + path, headers=H, timeout=60, **kw)
     if not r.ok:
         raise RuntimeError(f"{r.status_code}: {r.text[:200]}")
     return r.json()
@@ -49,6 +50,31 @@ except Exception as e:  # noqa: BLE001
 
 if st.button("Refresh"):
     st.rerun()
+
+# ---- one message for every video still needing thumbnails ----
+try:
+    pending = api("GET", "/api/flow/pending-thumbs")
+except Exception as e:  # noqa: BLE001
+    pending = []
+    st.warning(f"Couldn't check which videos need thumbnails: {e}")
+st.subheader(f"All videos still needing thumbnails: {len(pending)}")
+if pending:
+    st.caption(" · ".join(f"#{p['id']} {p['title']} ({p['prompts']} prompts)" for p in pending))
+    pick = st.multiselect("Videos in the message (all by default)", [p["id"] for p in pending],
+                          default=[p["id"] for p in pending],
+                          format_func=lambda i: next(f"#{p['id']} {p['title']}" for p in pending if p["id"] == i))
+    if st.button("Make ONE Flow Agent message for these", type="primary", disabled=not pick):
+        try:
+            st.session_state["batch_msg"] = api("POST", "/api/flow/agent-batch", json={"ids": pick})["text"]
+        except Exception as e:  # noqa: BLE001
+            st.error(str(e))
+    if st.session_state.get("batch_msg"):
+        st.caption("Paste this into the Flow Agent (copy icon, top right). The images can all be in one project.")
+        code(st.session_state["batch_msg"])
+else:
+    st.caption("Every video has thumbnail options already (or is still waiting for its prompts).")
+st.divider()
+st.subheader("One video at a time")
 if not videos:
     st.info("No videos waiting.")
 

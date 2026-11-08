@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import html
 import time
@@ -10,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from fastapi import Body, Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from PIL import Image, ImageOps
 
@@ -647,7 +648,36 @@ def agent_copy(vid: int):
 
 @app.get("/api/inbox", dependencies=[api])
 def get_inbox():
-    return thumbs.inbox()
+    return {**thumbs.inbox(), "videos": thumbs.inbox_videos()}
+
+
+@app.get("/api/flow/pending-thumbs", dependencies=[api])
+def pending_thumbs():
+    """Videos that still need thumbnails (have prompts, no options yet)."""
+    return [{"id": v["id"], "title": v["title"] or v["file_name"], "state": v["thumb_state"],
+             "prompts": len(json.loads(v["thumb_prompts"] or "[]"))} for v in thumbs.pending_thumb_videos()]
+
+
+@app.post("/api/flow/agent-batch", dependencies=[api])
+def agent_batch(data: dict = Body(default={})):
+    """ONE Flow Agent message for every video still needing thumbnails (or the ids given)."""
+    try:
+        text, ids = thumbs.agent_batch_message(data.get("ids") or None)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    return {"text": text, "videos": ids}
+
+
+@app.post("/api/flow/auto-option", dependencies=[api])
+async def auto_option(file: UploadFile = File(...), tag: int = Form(0)):
+    """An image from the Flow Agent; the server works out which waiting video it is for."""
+    raw = await file.read()
+    if len(raw) > 25 * 1024 * 1024:
+        raise HTTPException(413, "image too big")
+    try:
+        return await asyncio.to_thread(thumbs.auto_option, raw, tag or None)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"not a usable image: {e}")
 
 
 @app.post("/api/videos/{vid}/add-option", dependencies=[api])
@@ -657,7 +687,7 @@ async def add_option(vid: int, file: UploadFile = File(...)):
     if len(raw) > 25 * 1024 * 1024:
         raise HTTPException(413, "image too big")
     try:
-        n = thumbs.add_option(vid, raw)
+        n, dup = thumbs.add_option_once(vid, raw)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(400, f"not a usable image: {e}")
-    return {"ok": True, "options": n}
+    return {"ok": True, "options": n, "duplicate": dup}
